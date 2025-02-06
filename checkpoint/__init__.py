@@ -3,13 +3,13 @@ from .manager import (
     ModelArchitecture,
     ModelVariant,
     ModelTask,
-    ModelInfo
+    ModelInfo,
 )
 
 __all__ = [
-    'ModelCheckpointManager',
-    'ModelArchitecture',
-    'ModelVariant',
-    'ModelTask',
-    'ModelInfo'
-] 
+    "ModelCheckpointManager",
+    "ModelArchitecture",
+    "ModelVariant",
+    "ModelTask",
+    "ModelInfo",
+]

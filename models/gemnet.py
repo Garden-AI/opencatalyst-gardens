@@ -3,16 +3,16 @@ from models.base import OC20Model
 from checkpoint.manager import ModelArchitecture, ModelVariant
 
 
-class _EquiformerV2Large(OC20Model):
-    """Internal implementation of EquiformerV2 Large model for structure-to-energy-and-forces predictions.
+class _GemNetOCLarge(OC20Model):
+    """Internal implementation of GemNet-OC Large model.
 
-    This is the internal implementation class that handles the core model functionality.
-    The public interface is provided by the Modal-decorated class in modal_app.py.
+    GemNet-OC is a geometric message passing neural network optimized for catalysis,
+    with explicit geometric information in message passing.
     """
 
     def __init__(self):
         super().__init__()
-        self.architecture = ModelArchitecture.EQUIFORMER_V2
+        self.architecture = ModelArchitecture.GEMNET_OC
         self.variant = ModelVariant.LARGE
 
     def initialize_model(self, checkpoint_path: str):

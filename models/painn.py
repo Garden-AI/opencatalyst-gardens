@@ -3,17 +3,17 @@ from models.base import OC20Model
 from checkpoint.manager import ModelArchitecture, ModelVariant
 
 
-class _EquiformerV2Large(OC20Model):
-    """Internal implementation of EquiformerV2 Large model for structure-to-energy-and-forces predictions.
+class _PaiNNBase(OC20Model):
+    """Internal implementation of PaiNN (Polarizable Interaction Neural Network) model.
 
-    This is the internal implementation class that handles the core model functionality.
-    The public interface is provided by the Modal-decorated class in modal_app.py.
+    PaiNN is designed to learn molecular potentials while respecting physical symmetries,
+    with particular focus on polarization effects.
     """
 
     def __init__(self):
         super().__init__()
-        self.architecture = ModelArchitecture.EQUIFORMER_V2
-        self.variant = ModelVariant.LARGE
+        self.architecture = ModelArchitecture.PAINN
+        self.variant = ModelVariant.BASE
 
     def initialize_model(self, checkpoint_path: str):
         """Initialize the model with a checkpoint."""
