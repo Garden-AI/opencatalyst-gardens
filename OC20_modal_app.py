@@ -48,16 +48,11 @@ class _Base:
 
     @modal.enter()
     def load_model(self):
-        """Load the EquiformerV2 model."""
+        """Load the model."""
         checkpoint_path = self.checkpoint_manager.get_checkpoint_path(
             self.model.architecture, self.model.variant
         )
         self.model.initialize_model(str(checkpoint_path))
-
-    @staticmethod
-    def atoms_to_dict(atoms: Atoms) -> Dict[str, Any]:
-        """Convenience method for converting Atoms to dict format."""
-        return OC20Model._atoms_to_dict(atoms)
 
 
 @app.cls(gpu="A10G")
@@ -84,13 +79,13 @@ class EquiformerV2Large_S2EF(_Base):
         Predict the optimized structure and energy.
 
         Args:
-            structure: Either an ASE Atoms object or its dictionary representation of the complete system (slab + adsorbate)
+            structure: Either an ASE Atoms object or its dictionary representation (from Atoms.todict())
             steps: Maximum number of optimization steps
             fmax: Force convergence criterion in eV/Å
 
         Returns:
             Dictionary containing:
-                - structure: Optimized atomic structure
+                - structure: Optimized atomic structure as dictionary (from Atoms.todict())
                 - converged: Whether optimization converged
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
@@ -139,7 +134,8 @@ class PaiNN_S2EF(_Base):
 @app.local_entrypoint()
 def main():
     """Example usage demonstrating all available models."""
-    # Create a test structure
+
+    # Create a catalyst slab
     slab = fcc111("Cu", size=(2, 2, 3), vacuum=10.0)
     adsorbate = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
 
@@ -156,8 +152,13 @@ def main():
         ("PaiNN", PaiNN_S2EF()),
     ]
 
+    # Convert structure to dictionary once
+    structure_dict = slab.todict()
+
     for name, model in models:
         print(f"\nTesting {name} model:")
-        structure_dict = _Base.atoms_to_dict(slab)
         results = model.predict.remote(structure_dict)
         print(f"Results: {results}")
+        
+        # convert result back to Atoms if needed
+        optimized_structure = Atoms.fromdict(results["structure"])

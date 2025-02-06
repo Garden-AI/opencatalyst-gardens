@@ -35,13 +35,13 @@ class OC20Model:
         Predict the optimized structure and energy.
 
         Args:
-            structure: Either an ASE Atoms object or its dictionary representation
+            structure: Either an ASE Atoms object or its dictionary representation (from Atoms.todict())
             steps: Maximum number of optimization steps
             fmax: Force convergence criterion in eV/Å
 
         Returns:
             Dictionary containing:
-                - structure: Optimized atomic structure
+                - structure: Optimized atomic structure as dictionary (from Atoms.todict())
                 - converged: Whether optimization converged
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
@@ -51,7 +51,7 @@ class OC20Model:
 
         # Convert input to Atoms object if needed
         if isinstance(structure, dict):
-            structure = self._dict_to_atoms(structure)
+            structure = Atoms.fromdict(structure)
 
         # Validate input
         if len(structure) == 0:
@@ -64,13 +64,13 @@ class OC20Model:
         try:
             converged = opt.run(fmax=fmax, steps=steps)
             return {
-                "structure": self._atoms_to_dict(structure),
+                "structure": structure.todict(),
                 "converged": converged,
                 "steps": opt.get_number_of_steps(),
                 "energy": float(structure.get_potential_energy()),
             }
         except Exception as e:
-            return {"error": str(e), "structure": self._atoms_to_dict(structure)}
+            return {"error": str(e), "structure": structure.todict()}
 
     @staticmethod
     def _atoms_to_dict(atoms: Atoms) -> Dict[str, Any]:
