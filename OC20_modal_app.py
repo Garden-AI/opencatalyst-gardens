@@ -9,6 +9,9 @@ from models.base import OC20Model
 from models.equiformer import _EquiformerV2Large
 from models.gemnet import _GemNetOCLarge
 from models.painn import _PaiNNBase
+from models.dimenet import _DimeNetPPLarge
+from models.schnet import _SchNetLarge
+from models.scn import _SCNLarge, _ESCNLarge
 
 CHECKPOINT_DIR = "/root/fairchem_checkpoints"
 
@@ -44,7 +47,7 @@ app.image = image
 
 class _Base:
     """Base class for Modal model interfaces."""
-    
+
     def __init__(self):
         self.checkpoint_manager = ModelCheckpointManager(CHECKPOINT_DIR)
         self.model = None  # Set by subclasses
@@ -54,7 +57,7 @@ class _Base:
         """Load the model."""
         if self.model is None:
             raise RuntimeError("Model implementation not set")
-            
+
         checkpoint_path = self.checkpoint_manager.get_checkpoint_path(
             self.model.architecture, self.model.variant
         )
@@ -84,7 +87,7 @@ class _Base:
         """
         if self.model is None:
             raise RuntimeError("Model implementation not set")
-            
+
         return self.model.predict(structure, steps=steps, fmax=fmax)
 
 
@@ -115,6 +118,42 @@ class PaiNN_S2EF(_Base):
         self.model = _PaiNNBase()
 
 
+@app.cls(gpu="A10G")
+class DimeNetPP_S2EF(_Base):
+    """Modal interface to DimeNet++ model for structure-to-energy-and-forces predictions."""
+
+    def __init__(self):
+        super().__init__()
+        self.model = _DimeNetPPLarge()
+
+
+@app.cls(gpu="A10G")
+class SchNet_S2EF(_Base):
+    """Modal interface to SchNet model for structure-to-energy-and-forces predictions."""
+
+    def __init__(self):
+        super().__init__()
+        self.model = _SchNetLarge()
+
+
+@app.cls(gpu="A10G")
+class SCN_S2EF(_Base):
+    """Modal interface to SCN model for structure-to-energy-and-forces predictions."""
+
+    def __init__(self):
+        super().__init__()
+        self.model = _SCNLarge()
+
+
+@app.cls(gpu="A10G")
+class ESCN_S2EF(_Base):
+    """Modal interface to eSCN model for structure-to-energy-and-forces predictions."""
+
+    def __init__(self):
+        super().__init__()
+        self.model = _ESCNLarge()
+
+
 @app.local_entrypoint()
 def main():
     """Example usage demonstrating all available models."""
@@ -134,6 +173,10 @@ def main():
         ("EquiformerV2", EquiformerV2_S2EF()),
         ("GemNet-OC", GemNetOC_S2EF()),
         ("PaiNN", PaiNN_S2EF()),
+        ("DimeNet++", DimeNetPP_S2EF()),
+        ("SchNet", SchNet_S2EF()),
+        ("SCN", SCN_S2EF()),
+        ("eSCN", ESCN_S2EF()),
     ]
 
     # Convert structure to dictionary for remote execution

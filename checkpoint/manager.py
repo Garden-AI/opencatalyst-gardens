@@ -13,6 +13,7 @@ class ModelArchitecture(Enum):
     PAINN = "PaiNN"
     SCHNET = "SchNet"
     DIMENET_PLUS_PLUS = "DimeNet++"
+    SCN = "SCN"
 
 
 class ModelTask(Enum):
@@ -76,6 +77,46 @@ class ModelCheckpointManager:
             description="PaiNN model for structure to energy and forces",
             architecture=ModelArchitecture.PAINN,
             variant=ModelVariant.BASE,
+            default_task=ModelTask.S2EF,
+        ),
+        # DimeNet++ Models
+        (ModelArchitecture.DIMENET_PLUS_PLUS, ModelVariant.LARGE): ModelInfo(
+            name="DimeNet++",
+            registry_name="DimeNet++-S2EF-OC20-All",
+            checkpoint_filename="dimenetpp_all.pt",
+            description="DimeNet++ model for structure to energy and forces",
+            architecture=ModelArchitecture.DIMENET_PLUS_PLUS,
+            variant=ModelVariant.LARGE,
+            default_task=ModelTask.S2EF,
+        ),
+        # SchNet Models
+        (ModelArchitecture.SCHNET, ModelVariant.LARGE): ModelInfo(
+            name="SchNet",
+            registry_name="SchNet-S2EF-OC20-All",
+            checkpoint_filename="schnet_all_large.pt",
+            description="SchNet model for structure to energy and forces",
+            architecture=ModelArchitecture.SCHNET,
+            variant=ModelVariant.LARGE,
+            default_task=ModelTask.S2EF,
+        ),
+        # SCN Models
+        (ModelArchitecture.SCN, ModelVariant.LARGE): ModelInfo(
+            name="SCN",
+            registry_name="SCN-S2EF-OC20-All+MD",
+            checkpoint_filename="scn_all_md_s2ef.pt",
+            description="SCN model for structure to energy and forces",
+            architecture=ModelArchitecture.SCN,
+            variant=ModelVariant.LARGE,
+            default_task=ModelTask.S2EF,
+        ),
+        # eSCN Models
+        (ModelArchitecture.ESCN, ModelVariant.LARGE): ModelInfo(
+            name="eSCN",
+            registry_name="eSCN-L6-M3-Lay20-S2EF-OC20-All+MD",
+            checkpoint_filename="escn_l6_m3_lay20_all_md_s2ef.pt",
+            description="eSCN model for structure to energy and forces",
+            architecture=ModelArchitecture.ESCN,
+            variant=ModelVariant.LARGE,
             default_task=ModelTask.S2EF,
         ),
     }
