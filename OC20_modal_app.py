@@ -43,30 +43,22 @@ app.image = image
 
 
 class _Base:
+    """Base class for Modal model interfaces."""
+    
     def __init__(self):
         self.checkpoint_manager = ModelCheckpointManager(CHECKPOINT_DIR)
+        self.model = None  # Set by subclasses
 
     @modal.enter()
     def load_model(self):
         """Load the model."""
+        if self.model is None:
+            raise RuntimeError("Model implementation not set")
+            
         checkpoint_path = self.checkpoint_manager.get_checkpoint_path(
             self.model.architecture, self.model.variant
         )
         self.model.initialize_model(str(checkpoint_path))
-
-
-@app.cls(gpu="A10G")
-class EquiformerV2Large_S2EF(_Base):
-    """Modal interface to EquiformerV2 model for structure-to-energy-and-forces predictions.
-
-    This class provides the public Modal interface to the EquiformerV2 Large model,
-    handling Modal-specific functionality while delegating core model operations to
-    the internal implementation.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.model = _EquiformerV2Large()
 
     @modal.method()
     def predict(
@@ -90,7 +82,19 @@ class EquiformerV2Large_S2EF(_Base):
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
         """
+        if self.model is None:
+            raise RuntimeError("Model implementation not set")
+            
         return self.model.predict(structure, steps=steps, fmax=fmax)
+
+
+@app.cls(gpu="A10G")
+class EquiformerV2_S2EF(_Base):
+    """Modal interface to EquiformerV2 model for structure-to-energy-and-forces predictions."""
+
+    def __init__(self):
+        super().__init__()
+        self.model = _EquiformerV2Large()
 
 
 @app.cls(gpu="A10G")
@@ -101,16 +105,6 @@ class GemNetOC_S2EF(_Base):
         super().__init__()
         self.model = _GemNetOCLarge()
 
-    @modal.method()
-    def predict(
-        self,
-        structure: Union[Dict[str, Any], Atoms],
-        steps: int = 200,
-        fmax: float = 0.05,
-    ) -> Dict[str, Any]:
-        """Predict the optimized structure and energy."""
-        return self.model.predict(structure, steps=steps, fmax=fmax)
-
 
 @app.cls(gpu="A10G")
 class PaiNN_S2EF(_Base):
@@ -119,16 +113,6 @@ class PaiNN_S2EF(_Base):
     def __init__(self):
         super().__init__()
         self.model = _PaiNNBase()
-
-    @modal.method()
-    def predict(
-        self,
-        structure: Union[Dict[str, Any], Atoms],
-        steps: int = 200,
-        fmax: float = 0.05,
-    ) -> Dict[str, Any]:
-        """Predict the optimized structure and energy."""
-        return self.model.predict(structure, steps=steps, fmax=fmax)
 
 
 @app.local_entrypoint()
@@ -147,18 +131,18 @@ def main():
 
     # Test each model
     models = [
-        ("EquiformerV2", EquiformerV2Large_S2EF()),
+        ("EquiformerV2", EquiformerV2_S2EF()),
         ("GemNet-OC", GemNetOC_S2EF()),
         ("PaiNN", PaiNN_S2EF()),
     ]
 
-    # Convert structure to dictionary once
+    # Convert structure to dictionary for remote execution
     structure_dict = slab.todict()
 
     for name, model in models:
         print(f"\nTesting {name} model:")
         results = model.predict.remote(structure_dict)
         print(f"Results: {results}")
-        
+
         # convert result back to Atoms if needed
         optimized_structure = Atoms.fromdict(results["structure"])
