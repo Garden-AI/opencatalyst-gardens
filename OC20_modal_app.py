@@ -92,6 +92,30 @@ MODELS = {
         architecture=ModelArchitecture.ESCN,
         default_task=ModelTask.S2EF,
     ),
+    f"{ModelArchitecture.PAINN}_IS2RE": ModelInfo(
+        name="PaiNN-IS2RE",
+        registry_name="PaiNN-IS2RE-OC20-All",
+        checkpoint_filename="painn_h1024_bs4x8_is2re_all.pt",
+        description="PaiNN model for initial structure to relaxed energy",
+        architecture=ModelArchitecture.PAINN,
+        default_task=ModelTask.IS2RE,
+    ),
+    f"{ModelArchitecture.DIMENET_PLUS_PLUS}_IS2RE": ModelInfo(
+        name="DimeNet++-IS2RE",
+        registry_name="DimeNet++-IS2RE-OC20-All",
+        checkpoint_filename="dimenetpp_all.pt",
+        description="DimeNet++ model for initial structure to relaxed energy",
+        architecture=ModelArchitecture.DIMENET_PLUS_PLUS,
+        default_task=ModelTask.IS2RE,
+    ),
+    f"{ModelArchitecture.SCHNET}_IS2RE": ModelInfo(
+        name="SchNet-IS2RE",
+        registry_name="SchNet-IS2RE-OC20-All",
+        checkpoint_filename="schnet_all.pt",
+        description="SchNet model for initial structure to relaxed energy",
+        architecture=ModelArchitecture.SCHNET,
+        default_task=ModelTask.IS2RE,
+    ),
 }
 
 
@@ -104,9 +128,17 @@ class ModelCheckpointManager:
     
     def get_checkpoint_path(self, architecture: ModelArchitecture) -> pathlib.Path:
         """Get the path for a specific model's checkpoint."""
+        # Try direct lookup first (for S2EF models)
         model_info = MODELS.get(architecture)
+        
+        # If not found, try IS2RE variant
+        if not model_info:
+            is2re_key = f"{architecture}_IS2RE"
+            model_info = MODELS.get(is2re_key)
+        
         if not model_info:
             raise ValueError(f"Unsupported model: {architecture.value}")
+        
         return self.checkpoint_dir / model_info.checkpoint_filename
     
     def download_checkpoint(self, architecture: ModelArchitecture) -> pathlib.Path:
@@ -301,6 +333,61 @@ class _ESCNLarge(BaseOC20Model):
     def __init__(self):
         super().__init__()
         self.architecture = ModelArchitecture.ESCN
+    
+    def initialize_model(self, checkpoint_path: str):
+        """Initialize the model from checkpoint."""
+        import torch
+        from fairchem.core.common.relaxation.ase_utils import OCPCalculator
+        
+        self.calculator = OCPCalculator(
+            checkpoint_path=checkpoint_path,
+            cpu=False if torch.cuda.is_available() else True,
+        )
+
+
+# IS2RE Model Implementations
+class _PaiNN_IS2RE(BaseOC20Model):
+    """Internal implementation of PaiNN model for IS2RE."""
+    
+    def __init__(self):
+        super().__init__()
+        self.architecture = ModelArchitecture.PAINN
+    
+    def initialize_model(self, checkpoint_path: str):
+        """Initialize the model from checkpoint."""
+        import torch
+        from fairchem.core.common.relaxation.ase_utils import OCPCalculator
+        
+        self.calculator = OCPCalculator(
+            checkpoint_path=checkpoint_path,
+            cpu=False if torch.cuda.is_available() else True,
+        )
+
+
+class _DimeNetPP_IS2RE(BaseOC20Model):
+    """Internal implementation of DimeNet++ model for IS2RE."""
+    
+    def __init__(self):
+        super().__init__()
+        self.architecture = ModelArchitecture.DIMENET_PLUS_PLUS
+    
+    def initialize_model(self, checkpoint_path: str):
+        """Initialize the model from checkpoint."""
+        import torch
+        from fairchem.core.common.relaxation.ase_utils import OCPCalculator
+        
+        self.calculator = OCPCalculator(
+            checkpoint_path=checkpoint_path,
+            cpu=False if torch.cuda.is_available() else True,
+        )
+
+
+class _SchNet_IS2RE(BaseOC20Model):
+    """Internal implementation of SchNet model for IS2RE."""
+    
+    def __init__(self):
+        super().__init__()
+        self.architecture = ModelArchitecture.SCHNET
     
     def initialize_model(self, checkpoint_path: str):
         """Initialize the model from checkpoint."""
@@ -579,6 +666,82 @@ class ESCN_S2EF(_BaseModal):
         return self.model.predict(structure, steps=steps, fmax=fmax)
 
 
+# IS2RE Modal Classes
+@app.cls(gpu="A10G")
+class PaiNN_IS2RE(_BaseModal):
+    """Modal interface to PaiNN model for initial-structure-to-relaxed-energy predictions."""
+    
+    def __init__(self):
+        super().__init__(_PaiNN_IS2RE)
+    
+    @modal.method()
+    def predict(
+        self,
+        structure: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Predict the relaxed energy from an initial structure.
+        
+        Args:
+            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+        
+        Returns:
+            Dictionary containing:
+                - energy: Predicted relaxed energy in eV
+        """
+        return self.model.predict(structure)
+
+
+@app.cls(gpu="A10G")
+class DimeNetPP_IS2RE(_BaseModal):
+    """Modal interface to DimeNet++ model for initial-structure-to-relaxed-energy predictions."""
+    
+    def __init__(self):
+        super().__init__(_DimeNetPP_IS2RE)
+    
+    @modal.method()
+    def predict(
+        self,
+        structure: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Predict the relaxed energy from an initial structure.
+        
+        Args:
+            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+        
+        Returns:
+            Dictionary containing:
+                - energy: Predicted relaxed energy in eV
+        """
+        return self.model.predict(structure)
+
+
+@app.cls(gpu="A10G")
+class SchNet_IS2RE(_BaseModal):
+    """Modal interface to SchNet model for initial-structure-to-relaxed-energy predictions."""
+    
+    def __init__(self):
+        super().__init__(_SchNet_IS2RE)
+    
+    @modal.method()
+    def predict(
+        self,
+        structure: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Predict the relaxed energy from an initial structure.
+        
+        Args:
+            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+        
+        Returns:
+            Dictionary containing:
+                - energy: Predicted relaxed energy in eV
+        """
+        return self.model.predict(structure)
+
+
 @app.local_entrypoint()
 def main():
     """Example usage demonstrating all available models."""
@@ -598,8 +761,9 @@ def main():
     # Convert structure to dictionary for remote execution
     structure_dict = slab.todict()
     
-    # Test each model
-    models = [
+    # Test S2EF models (structure optimization)
+    print("\nTesting S2EF models (structure optimization):")
+    s2ef_models = [
         ("EquiformerV2", EquiformerV2_S2EF()),
         ("GemNet-OC", GemNetOC_S2EF()),
         ("PaiNN", PaiNN_S2EF()),
@@ -609,11 +773,24 @@ def main():
         ("eSCN", ESCN_S2EF()),
     ]
     
-    for name, model in models:
-        print(f"\nTesting {name} model:")
-        results = model.predict.remote(structure_dict)
-        print(f"Results: {results}")
+    # for name, model in s2ef_models:
+    #     print(f"\nTesting {name} model:")
+    #     results = model.predict.remote(structure_dict)
+    #     print(f"Results: {results}")
         
-        # Convert result back to Atoms if needed
-        optimized_structure = Atoms.fromdict(results["structure"])
-        print(optimized_structure) 
+    #     # Convert result back to Atoms if needed
+    #     optimized_structure = Atoms.fromdict(results["structure"])
+    #     print(f"Optimized structure: {optimized_structure}")
+    
+    # Test IS2RE models (direct energy prediction)
+    print("\nTesting IS2RE models (direct energy prediction):")
+    is2re_models = [
+        ("PaiNN", PaiNN_IS2RE()),
+        ("DimeNet++", DimeNetPP_IS2RE()),
+        ("SchNet", SchNet_IS2RE()),
+    ]
+    
+    for name, model in is2re_models:
+        print(f"\nTesting {name} IS2RE model:")
+        results = model.predict.remote(structure_dict)
+        print(f"Predicted relaxed energy: {results['energy']} eV") 
