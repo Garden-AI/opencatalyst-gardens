@@ -218,6 +218,46 @@ class BaseOC20Model:
             print(f"Optimization failed: {e}")
             return {"error": str(e), "structure": structure.todict()}
 
+    def _predict_batch(self, structures: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference using fairchem's Python API.
+        
+        Args:
+            structures: List of ASE Atoms dictionary representations.
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure).
+        """
+        import torch
+        import numpy as np
+        from ase import Atoms
+
+        assert self.calculator is not None, "Model not initialized. Call initialize_model first."
+
+        # Convert dictionaries to Atoms objects
+        atoms_list = [Atoms.fromdict(struct) for struct in structures]
+
+        # Perform batch inference
+        batch_results = []
+        for atoms in atoms_list:
+            atoms.set_calculator(self.calculator)
+            try:
+                energy = float(atoms.get_potential_energy())
+                forces = atoms.get_forces().tolist()
+                batch_results.append({
+                    "energy": energy,
+                    "forces": forces,
+                    "success": True
+                })
+            except Exception as e:
+                print(f"Failed to predict for structure: {e}")
+                batch_results.append({
+                    "error": str(e),
+                    "success": False
+                })
+
+        return batch_results
+
 
 class _EquiformerV2Large(BaseOC20Model):
     """Internal implementation of EquiformerV2 Large model."""
@@ -428,7 +468,7 @@ app = modal.App(name="opencatalyst-oc20", image=image)
 class _BaseModal:
     """Base class for Modal interfaces to OC20 models."""
     
-    def __init__(self, model_cls: BaseOC20Model):
+    def __init__(self, model_cls: type[BaseOC20Model]):
         self.CHECKPOINT_DIR = "/root/checkpoints"
         self.checkpoint_manager = ModelCheckpointManager(self.CHECKPOINT_DIR)
         self.model = model_cls()
@@ -473,6 +513,22 @@ class EquiformerV2_S2EF(_BaseModal):
         """
         return self.model.predict(structure, steps=steps, fmax=fmax)
 
+    @modal.method()
+    def predict_batch(
+        self,
+        structures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference on multiple structures.
+
+        Args:
+            structures: List of ASE Atoms object dictionary representations
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure)
+        """
+        return self.model._predict_batch(structures)
+
 
 @app.cls(gpu="A10G")
 class GemNetOC_S2EF(_BaseModal):
@@ -504,6 +560,22 @@ class GemNetOC_S2EF(_BaseModal):
                 - energy: Final energy in eV
         """
         return self.model.predict(structure, steps=steps, fmax=fmax)
+
+    @modal.method()
+    def predict_batch(
+        self,
+        structures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference on multiple structures.
+
+        Args:
+            structures: List of ASE Atoms object dictionary representations
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure)
+        """
+        return self.model._predict_batch(structures)
 
 
 @app.cls(gpu="A10G")
@@ -537,6 +609,22 @@ class PaiNN_S2EF(_BaseModal):
         """
         return self.model.predict(structure, steps=steps, fmax=fmax)
 
+    @modal.method()
+    def predict_batch(
+        self,
+        structures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference on multiple structures.
+
+        Args:
+            structures: List of ASE Atoms object dictionary representations
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure)
+        """
+        return self.model._predict_batch(structures)
+
 
 @app.cls(gpu="A10G")
 class DimeNetPP_S2EF(_BaseModal):
@@ -568,6 +656,22 @@ class DimeNetPP_S2EF(_BaseModal):
                 - energy: Final energy in eV
         """
         return self.model.predict(structure, steps=steps, fmax=fmax)
+
+    @modal.method()
+    def predict_batch(
+        self,
+        structures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference on multiple structures.
+
+        Args:
+            structures: List of ASE Atoms object dictionary representations
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure)
+        """
+        return self.model._predict_batch(structures)
 
 
 @app.cls(gpu="A10G")
@@ -601,6 +705,22 @@ class SchNet_S2EF(_BaseModal):
         """
         return self.model.predict(structure, steps=steps, fmax=fmax)
 
+    @modal.method()
+    def predict_batch(
+        self,
+        structures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference on multiple structures.
+
+        Args:
+            structures: List of ASE Atoms object dictionary representations
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure)
+        """
+        return self.model._predict_batch(structures)
+
 
 @app.cls(gpu="A10G")
 class SCN_S2EF(_BaseModal):
@@ -632,6 +752,22 @@ class SCN_S2EF(_BaseModal):
                 - energy: Final energy in eV
         """
         return self.model.predict(structure, steps=steps, fmax=fmax)
+
+    @modal.method()
+    def predict_batch(
+        self,
+        structures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference on multiple structures.
+
+        Args:
+            structures: List of ASE Atoms object dictionary representations
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure)
+        """
+        return self.model._predict_batch(structures)
 
 
 @app.cls(gpu="A10G")
@@ -665,6 +801,22 @@ class ESCN_S2EF(_BaseModal):
         """
         return self.model.predict(structure, steps=steps, fmax=fmax)
 
+    @modal.method()
+    def predict_batch(
+        self,
+        structures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference on multiple structures.
+
+        Args:
+            structures: List of ASE Atoms object dictionary representations
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure)
+        """
+        return self.model._predict_batch(structures)
+
 
 # IS2RE Modal Classes
 @app.cls(gpu="A10G")
@@ -691,6 +843,22 @@ class PaiNN_IS2RE(_BaseModal):
         """
         return self.model.predict(structure)
 
+    @modal.method()
+    def predict_batch(
+        self,
+        structures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference on multiple structures.
+
+        Args:
+            structures: List of ASE Atoms object dictionary representations
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure)
+        """
+        return self.model._predict_batch(structures)
+
 
 @app.cls(gpu="A10G")
 class DimeNetPP_IS2RE(_BaseModal):
@@ -715,6 +883,22 @@ class DimeNetPP_IS2RE(_BaseModal):
                 - energy: Predicted relaxed energy in eV
         """
         return self.model.predict(structure)
+
+    @modal.method()
+    def predict_batch(
+        self,
+        structures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference on multiple structures.
+
+        Args:
+            structures: List of ASE Atoms object dictionary representations
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure)
+        """
+        return self.model._predict_batch(structures)
 
 
 @app.cls(gpu="A10G")
@@ -741,56 +925,98 @@ class SchNet_IS2RE(_BaseModal):
         """
         return self.model.predict(structure)
 
+    @modal.method()
+    def predict_batch(
+        self,
+        structures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Perform fast, batched inference on multiple structures.
+
+        Args:
+            structures: List of ASE Atoms object dictionary representations
+
+        Returns:
+            List of prediction outputs (each output corresponds to one input structure)
+        """
+        return self.model._predict_batch(structures)
+
 
 @app.local_entrypoint()
 def main():
-    """Example usage demonstrating all available models."""
+    """Example usage demonstrating how to use OC20 models for catalysis predictions.
+
+    Note: All models have the same interface, so you can use them interchangeably.
+    Here we use the EquiformerV2 model.
+    
+    This example shows:
+    1. Single structure prediction with structure optimization
+    2. Batch prediction for parameter sweeps
+    3. Model comparison
+    """
     from ase.build import fcc111, add_adsorbate
     from ase import Atoms
     
-    # Create a catalyst slab
-    slab = fcc111("Cu", size=(2, 2, 3), vacuum=10.0)
-    adsorbate = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
+    def create_pt_co_slab():
+        """Create a Pt-Co(111) slab with CO2 adsorbate."""
+        # Create a Pt-Co(111) slab
+        slab = fcc111('Pt', size=(2, 2, 4), vacuum=12.0)
+        slab.symbols[2] = 'Co'  # Replace one second layer atom with Co
+        
+        # Create CO2 adsorbate
+        co2 = Atoms('CO2',
+                   positions=[[0.0, 0.0, 0.0],  # C
+                            [0.0, 0.0, 1.16],   # O
+                            [0.0, 0.0, -1.16]]) # O
+        
+        # Add CO2 at a bridge site
+        add_adsorbate(slab, co2, height=2.0, position=(2.0, 1.5))
+        return slab
     
-    # Add the adsorbate to the surface
-    cell = slab.cell
-    x = float(cell.array[0][0] / 3)  # 1/3 across the x direction
-    y = float(cell.array[1][1] / 2)  # center in y
-    add_adsorbate(slab, adsorbate, height=2.0, position=(x, y))
-    
-    # Convert structure to dictionary for remote execution
+    # 1. Single structure prediction
+    slab = create_pt_co_slab()
     structure_dict = slab.todict()
     
-    # Test S2EF models (structure optimization)
-    print("\nTesting S2EF models (structure optimization):")
-    s2ef_models = [
-        ("EquiformerV2", EquiformerV2_S2EF()),
-        ("GemNet-OC", GemNetOC_S2EF()),
-        ("PaiNN", PaiNN_S2EF()),
-        ("DimeNet++", DimeNetPP_S2EF()),
-        ("SchNet", SchNet_S2EF()),
-        ("SCN", SCN_S2EF()),
-        ("eSCN", ESCN_S2EF()),
-    ]
+    # Run structure optimization with EquiformerV2
+    model = EquiformerV2_S2EF()
+    result = model.predict.remote(
+        structure_dict,
+        steps=200,    # Maximum optimization steps
+        fmax=0.05,    # Force convergence criterion in eV/Å
+    )
+    # Result contains:
+    # - structure: Optimized structure as dictionary
+    # - converged: Whether optimization converged
+    # - steps: Number of steps taken
+    # - energy: Final energy in eV
     
-    # for name, model in s2ef_models:
-    #     print(f"\nTesting {name} model:")
-    #     results = model.predict.remote(structure_dict)
-    #     print(f"Results: {results}")
-        
-    #     # Convert result back to Atoms if needed
-    #     optimized_structure = Atoms.fromdict(results["structure"])
-    #     print(f"Optimized structure: {optimized_structure}")
+    # 2. Batch prediction (e.g., CO2 height sweep)
+    batch_structures = []
+    heights = [1.8, 2.0, 2.2, 2.4]  # Different CO2 heights to test
+    for height in heights:
+        slab = create_pt_co_slab()
+        co2_indices = [-3, -2, -1]  # Last 3 atoms are CO2
+        slab.positions[co2_indices] += [0, 0, height - 2.0]
+        batch_structures.append(slab.todict())
     
-    # Test IS2RE models (direct energy prediction)
-    print("\nTesting IS2RE models (direct energy prediction):")
-    is2re_models = [
-        ("PaiNN", PaiNN_IS2RE()),
-        ("DimeNet++", DimeNetPP_IS2RE()),
-        ("SchNet", SchNet_IS2RE()),
-    ]
+    # Run batch prediction
+    batch_results = model.predict_batch.remote(batch_structures)
+    # Each result contains:
+    # - energy: Structure energy in eV
+    # - forces: Atomic forces as list
+    # - success: Whether prediction succeeded
     
-    for name, model in is2re_models:
-        print(f"\nTesting {name} IS2RE model:")
-        results = model.predict.remote(structure_dict)
-        print(f"Predicted relaxed energy: {results['energy']} eV") 
+    # 3. Model comparison
+    models = {
+        "EquiformerV2": EquiformerV2_S2EF(),
+        "GemNet-OC": GemNetOC_S2EF(),
+        "PaiNN": PaiNN_S2EF(),
+    }
+    
+    # Compare predictions for a single structure
+    test_structure = batch_structures[1]  # Use 2.0Å height structure
+    model_predictions = {
+        name: model.predict_batch.remote([test_structure])[0]
+        for name, model in models.items()
+    }
+    # Each prediction contains energy and forces for comparison 
