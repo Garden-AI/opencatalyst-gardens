@@ -1,6 +1,7 @@
 import pathlib
 from dataclasses import dataclass
 from enum import Enum
+from sys import meta_path
 from typing import Any
 
 import modal
@@ -172,91 +173,118 @@ class ModelCheckpointManager:
 
 
 class BaseOC20Model:
-    """Base class for OC20 models."""
+    """Base class for OC20 models providing structure optimization functionality."""
     
     def __init__(self):
         self.architecture: ModelArchitecture
         self.calculator = None
-    
-    def initialize_model(self, checkpoint_path: str):
-        """Initialize the model with a checkpoint. Must be implemented by subclasses."""
-        raise NotImplementedError("Subclasses must implement initialize_model")
-    
-    def predict(
-        self,
-        structure,
-        steps: int = 200,
-        fmax: float = 0.05,
-    ) -> dict[str, Any]:
-        """Run structure optimization and return results."""
+        self.checkpoint_path = None
+
+    def _validate_structures(
+        self, 
+        structures: list[dict[str, Any] | Any]
+    ) -> list[Any]:
+        """
+        Convert structure representations to ASE Atoms objects and validate them.
+
+        Args:
+            structures: List of structures as dictionaries or ASE Atoms objects.
+
+        Returns:
+            List of ASE Atoms objects.
+
+        Raises:
+            ValueError: If any structure is empty.
+        """
         from ase import Atoms
+
+        validated = []
+        for struct in structures:
+            atoms_obj = Atoms.fromdict(struct) if isinstance(struct, dict) else struct
+            if len(atoms_obj) == 0:
+                raise ValueError("Structure cannot be empty")
+            validated.append(atoms_obj)
+        return validated
+
+    def _optimize_structure(
+        self, 
+        atoms, 
+        steps: int, 
+        fmax: float
+    ) -> dict[str, Any]:
+        """
+        Optimize the given ASE Atoms instance using the BFGS method.
+
+        Args:
+            atoms: ASE Atoms instance with its calculator attached.
+            steps: Maximum optimization steps.
+            fmax: Force convergence threshold (eV/Å).
+
+        Returns:
+            Dictionary containing the optimization result.
+        """
         from ase.optimize import BFGS
-        
-        if self.calculator is None:
-            raise RuntimeError("Model not initialized. Call initialize_model first.")
-        
-        if isinstance(structure, dict):
-            structure = Atoms.fromdict(structure)
-        
-        # Validate input
-        if len(structure) == 0:
-            raise ValueError("Structure cannot be empty")
-        
-        # Setup calculator and run optimization
-        structure.set_calculator(self.calculator)
-        optimizer = BFGS(structure, trajectory=None)
-        
+
         try:
+            optimizer = BFGS(atoms, trajectory=None)
             converged = optimizer.run(fmax=fmax, steps=steps)
-            return {
-                "structure": structure.todict(),
+            result = {
+                "structure": atoms.todict(),
                 "converged": converged,
                 "steps": optimizer.get_number_of_steps(),
-                "energy": float(structure.get_potential_energy()),
+                "energy": float(atoms.get_potential_energy()),
+                "forces": atoms.get_forces().tolist(),
+                "success": True,
             }
         except Exception as e:
             print(f"Optimization failed: {e}")
-            return {"error": str(e), "structure": structure.todict()}
+            result = {
+                "structure": atoms.todict(),
+                "converged": False,
+                "steps": 0,
+                "energy": None,
+                "forces": None,
+                "success": False,
+                "error": str(e),
+            }
+        return result
 
-    def _predict_batch(self, structures: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def predict(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
+        steps: int = 200,
+        fmax: float = 0.05,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Perform fast, batched inference using fairchem's Python API.
-        
+        Optimize provided structure(s) and return the results.
+
         Args:
-            structures: List of ASE Atoms dictionary representations.
+            structures: Single structure (dict) or list of structures.
+            steps: Maximum optimization steps.
+            fmax: Force convergence threshold (eV/Å).
 
         Returns:
-            List of prediction outputs (each output corresponds to one input structure).
+            A dictionary for single input or a list of dictionaries for multiple structures.
         """
         import torch
-        import numpy as np
-        from ase import Atoms
 
-        assert self.calculator is not None, "Model not initialized. Call initialize_model first."
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
 
-        # Convert dictionaries to Atoms objects
-        atoms_list = [Atoms.fromdict(struct) for struct in structures]
+        atoms_list = self._validate_structures(structures)
+        results = []
+        batch_size = 32
+        
+        for i in range(0, len(atoms_list), batch_size):
+            batch = atoms_list[i : i + batch_size]
+            for atoms in batch:
+                atoms.set_calculator(self.calculator)
+                results.append(self._optimize_structure(atoms, steps, fmax))
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-        # Perform batch inference
-        batch_results = []
-        for atoms in atoms_list:
-            atoms.set_calculator(self.calculator)
-            try:
-                energy = float(atoms.get_potential_energy())
-                forces = atoms.get_forces().tolist()
-                batch_results.append({
-                    "energy": energy,
-                    "forces": forces,
-                    "success": True
-                })
-            except Exception as e:
-                print(f"Failed to predict for structure: {e}")
-                batch_results.append({
-                    "error": str(e),
-                    "success": False
-                })
-
-        return batch_results
+        return results[0] if single_input else results
 
 
 class _EquiformerV2Large(BaseOC20Model):
@@ -271,6 +299,7 @@ class _EquiformerV2Large(BaseOC20Model):
         import torch
         from fairchem.core.common.relaxation.ase_utils import OCPCalculator
         
+        self.checkpoint_path = checkpoint_path
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
@@ -289,6 +318,7 @@ class _GemNetOCLarge(BaseOC20Model):
         import torch
         from fairchem.core.common.relaxation.ase_utils import OCPCalculator
         
+        self.checkpoint_path = checkpoint_path
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
@@ -307,6 +337,7 @@ class _PaiNNBase(BaseOC20Model):
         import torch
         from fairchem.core.common.relaxation.ase_utils import OCPCalculator
         
+        self.checkpoint_path = checkpoint_path
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
@@ -325,6 +356,7 @@ class _DimeNetPPLarge(BaseOC20Model):
         import torch
         from fairchem.core.common.relaxation.ase_utils import OCPCalculator
         
+        self.checkpoint_path = checkpoint_path
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
@@ -343,6 +375,7 @@ class _SchNetLarge(BaseOC20Model):
         import torch
         from fairchem.core.common.relaxation.ase_utils import OCPCalculator
         
+        self.checkpoint_path = checkpoint_path
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
@@ -361,6 +394,7 @@ class _SCNLarge(BaseOC20Model):
         import torch
         from fairchem.core.common.relaxation.ase_utils import OCPCalculator
         
+        self.checkpoint_path = checkpoint_path
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
@@ -379,6 +413,7 @@ class _ESCNLarge(BaseOC20Model):
         import torch
         from fairchem.core.common.relaxation.ase_utils import OCPCalculator
         
+        self.checkpoint_path = checkpoint_path
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
@@ -398,6 +433,7 @@ class _PaiNN_IS2RE(BaseOC20Model):
         import torch
         from fairchem.core.common.relaxation.ase_utils import OCPCalculator
         
+        self.checkpoint_path = checkpoint_path
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
@@ -416,6 +452,7 @@ class _DimeNetPP_IS2RE(BaseOC20Model):
         import torch
         from fairchem.core.common.relaxation.ase_utils import OCPCalculator
         
+        self.checkpoint_path = checkpoint_path
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
@@ -434,6 +471,7 @@ class _SchNet_IS2RE(BaseOC20Model):
         import torch
         from fairchem.core.common.relaxation.ase_utils import OCPCalculator
         
+        self.checkpoint_path = checkpoint_path
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
@@ -455,6 +493,7 @@ image = (
         "torch>=2.4.0",
         "fairchem-core",
         "ase",
+        "lmdb",
     )
     .run_commands(
         "pip install pyg_lib torch_geometric torch_sparse torch_scatter -f https://data.pyg.org/whl/torch-2.4.0+cu121.html"
@@ -492,42 +531,27 @@ class EquiformerV2_S2EF(_BaseModal):
     @modal.method()
     def predict(
         self,
-        structure: dict[str, Any],
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict the optimized structure and energy.
+        Predict optimized structure(s) and energy/forces.
         
         Args:
-            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+            structures: Single or list of ASE Atoms dictionary representations
             steps: Maximum number of optimization steps
             fmax: Force convergence criterion in eV/Å
         
         Returns:
-            Dictionary containing:
-                - structure: Optimized atomic structure as dictionary
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
                 - converged: Whether optimization converged
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
+                - forces: Final forces in eV/Å
         """
-        return self.model.predict(structure, steps=steps, fmax=fmax)
-
-    @modal.method()
-    def predict_batch(
-        self,
-        structures: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Perform fast, batched inference on multiple structures.
-
-        Args:
-            structures: List of ASE Atoms object dictionary representations
-
-        Returns:
-            List of prediction outputs (each output corresponds to one input structure)
-        """
-        return self.model._predict_batch(structures)
+        return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
 @app.cls(gpu="A10G")
@@ -540,42 +564,27 @@ class GemNetOC_S2EF(_BaseModal):
     @modal.method()
     def predict(
         self,
-        structure: dict[str, Any],
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict the optimized structure and energy.
+        Predict optimized structure(s) and energy/forces.
         
         Args:
-            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+            structures: Single or list of ASE Atoms dictionary representations
             steps: Maximum number of optimization steps
             fmax: Force convergence criterion in eV/Å
         
         Returns:
-            Dictionary containing:
-                - structure: Optimized atomic structure as dictionary
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
                 - converged: Whether optimization converged
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
+                - forces: Final forces in eV/Å
         """
-        return self.model.predict(structure, steps=steps, fmax=fmax)
-
-    @modal.method()
-    def predict_batch(
-        self,
-        structures: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Perform fast, batched inference on multiple structures.
-
-        Args:
-            structures: List of ASE Atoms object dictionary representations
-
-        Returns:
-            List of prediction outputs (each output corresponds to one input structure)
-        """
-        return self.model._predict_batch(structures)
+        return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
 @app.cls(gpu="A10G")
@@ -588,42 +597,27 @@ class PaiNN_S2EF(_BaseModal):
     @modal.method()
     def predict(
         self,
-        structure: dict[str, Any],
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict the optimized structure and energy.
+        Predict optimized structure(s) and energy/forces.
         
         Args:
-            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+            structures: Single or list of ASE Atoms dictionary representations
             steps: Maximum number of optimization steps
             fmax: Force convergence criterion in eV/Å
         
         Returns:
-            Dictionary containing:
-                - structure: Optimized atomic structure as dictionary
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
                 - converged: Whether optimization converged
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
+                - forces: Final forces in eV/Å
         """
-        return self.model.predict(structure, steps=steps, fmax=fmax)
-
-    @modal.method()
-    def predict_batch(
-        self,
-        structures: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Perform fast, batched inference on multiple structures.
-
-        Args:
-            structures: List of ASE Atoms object dictionary representations
-
-        Returns:
-            List of prediction outputs (each output corresponds to one input structure)
-        """
-        return self.model._predict_batch(structures)
+        return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
 @app.cls(gpu="A10G")
@@ -636,42 +630,27 @@ class DimeNetPP_S2EF(_BaseModal):
     @modal.method()
     def predict(
         self,
-        structure: dict[str, Any],
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict the optimized structure and energy.
+        Predict optimized structure(s) and energy/forces.
         
         Args:
-            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+            structures: Single or list of ASE Atoms dictionary representations
             steps: Maximum number of optimization steps
             fmax: Force convergence criterion in eV/Å
         
         Returns:
-            Dictionary containing:
-                - structure: Optimized atomic structure as dictionary
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
                 - converged: Whether optimization converged
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
+                - forces: Final forces in eV/Å
         """
-        return self.model.predict(structure, steps=steps, fmax=fmax)
-
-    @modal.method()
-    def predict_batch(
-        self,
-        structures: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Perform fast, batched inference on multiple structures.
-
-        Args:
-            structures: List of ASE Atoms object dictionary representations
-
-        Returns:
-            List of prediction outputs (each output corresponds to one input structure)
-        """
-        return self.model._predict_batch(structures)
+        return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
 @app.cls(gpu="A10G")
@@ -684,42 +663,27 @@ class SchNet_S2EF(_BaseModal):
     @modal.method()
     def predict(
         self,
-        structure: dict[str, Any],
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict the optimized structure and energy.
+        Predict optimized structure(s) and energy/forces.
         
         Args:
-            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+            structures: Single or list of ASE Atoms dictionary representations
             steps: Maximum number of optimization steps
             fmax: Force convergence criterion in eV/Å
         
         Returns:
-            Dictionary containing:
-                - structure: Optimized atomic structure as dictionary
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
                 - converged: Whether optimization converged
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
+                - forces: Final forces in eV/Å
         """
-        return self.model.predict(structure, steps=steps, fmax=fmax)
-
-    @modal.method()
-    def predict_batch(
-        self,
-        structures: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Perform fast, batched inference on multiple structures.
-
-        Args:
-            structures: List of ASE Atoms object dictionary representations
-
-        Returns:
-            List of prediction outputs (each output corresponds to one input structure)
-        """
-        return self.model._predict_batch(structures)
+        return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
 @app.cls(gpu="A10G")
@@ -732,42 +696,27 @@ class SCN_S2EF(_BaseModal):
     @modal.method()
     def predict(
         self,
-        structure: dict[str, Any],
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict the optimized structure and energy.
+        Predict optimized structure(s) and energy/forces.
         
         Args:
-            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+            structures: Single or list of ASE Atoms dictionary representations
             steps: Maximum number of optimization steps
             fmax: Force convergence criterion in eV/Å
         
         Returns:
-            Dictionary containing:
-                - structure: Optimized atomic structure as dictionary
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
                 - converged: Whether optimization converged
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
+                - forces: Final forces in eV/Å
         """
-        return self.model.predict(structure, steps=steps, fmax=fmax)
-
-    @modal.method()
-    def predict_batch(
-        self,
-        structures: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Perform fast, batched inference on multiple structures.
-
-        Args:
-            structures: List of ASE Atoms object dictionary representations
-
-        Returns:
-            List of prediction outputs (each output corresponds to one input structure)
-        """
-        return self.model._predict_batch(structures)
+        return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
 @app.cls(gpu="A10G")
@@ -780,42 +729,27 @@ class ESCN_S2EF(_BaseModal):
     @modal.method()
     def predict(
         self,
-        structure: dict[str, Any],
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict the optimized structure and energy.
+        Predict optimized structure(s) and energy/forces.
         
         Args:
-            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+            structures: Single or list of ASE Atoms dictionary representations
             steps: Maximum number of optimization steps
             fmax: Force convergence criterion in eV/Å
         
         Returns:
-            Dictionary containing:
-                - structure: Optimized atomic structure as dictionary
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
                 - converged: Whether optimization converged
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
+                - forces: Final forces in eV/Å
         """
-        return self.model.predict(structure, steps=steps, fmax=fmax)
-
-    @modal.method()
-    def predict_batch(
-        self,
-        structures: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Perform fast, batched inference on multiple structures.
-
-        Args:
-            structures: List of ASE Atoms object dictionary representations
-
-        Returns:
-            List of prediction outputs (each output corresponds to one input structure)
-        """
-        return self.model._predict_batch(structures)
+        return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
 # IS2RE Modal Classes
@@ -829,35 +763,27 @@ class PaiNN_IS2RE(_BaseModal):
     @modal.method()
     def predict(
         self,
-        structure: dict[str, Any],
-    ) -> dict[str, Any]:
+        structures: dict[str, Any] | list[dict[str, Any]],
+        steps: int = 200,
+        fmax: float = 0.05,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict the relaxed energy from an initial structure.
+        Predict optimized structure(s) and energy/forces.
         
         Args:
-            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+            structures: Single or list of ASE Atoms dictionary representations
+            steps: Maximum number of optimization steps
+            fmax: Force convergence criterion in eV/Å
         
         Returns:
-            Dictionary containing:
-                - energy: Predicted relaxed energy in eV
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
+                - converged: Whether optimization converged
+                - steps: Number of optimization steps taken
+                - energy: Final energy in eV
+                - forces: Final forces in eV/Å
         """
-        return self.model.predict(structure)
-
-    @modal.method()
-    def predict_batch(
-        self,
-        structures: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Perform fast, batched inference on multiple structures.
-
-        Args:
-            structures: List of ASE Atoms object dictionary representations
-
-        Returns:
-            List of prediction outputs (each output corresponds to one input structure)
-        """
-        return self.model._predict_batch(structures)
+        return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
 @app.cls(gpu="A10G")
@@ -870,35 +796,27 @@ class DimeNetPP_IS2RE(_BaseModal):
     @modal.method()
     def predict(
         self,
-        structure: dict[str, Any],
-    ) -> dict[str, Any]:
+        structures: dict[str, Any] | list[dict[str, Any]],
+        steps: int = 200,
+        fmax: float = 0.05,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict the relaxed energy from an initial structure.
+        Predict optimized structure(s) and energy/forces.
         
         Args:
-            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+            structures: Single or list of ASE Atoms dictionary representations
+            steps: Maximum number of optimization steps
+            fmax: Force convergence criterion in eV/Å
         
         Returns:
-            Dictionary containing:
-                - energy: Predicted relaxed energy in eV
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
+                - converged: Whether optimization converged
+                - steps: Number of optimization steps taken
+                - energy: Final energy in eV
+                - forces: Final forces in eV/Å
         """
-        return self.model.predict(structure)
-
-    @modal.method()
-    def predict_batch(
-        self,
-        structures: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Perform fast, batched inference on multiple structures.
-
-        Args:
-            structures: List of ASE Atoms object dictionary representations
-
-        Returns:
-            List of prediction outputs (each output corresponds to one input structure)
-        """
-        return self.model._predict_batch(structures)
+        return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
 @app.cls(gpu="A10G")
@@ -911,35 +829,27 @@ class SchNet_IS2RE(_BaseModal):
     @modal.method()
     def predict(
         self,
-        structure: dict[str, Any],
-    ) -> dict[str, Any]:
+        structures: dict[str, Any] | list[dict[str, Any]],
+        steps: int = 200,
+        fmax: float = 0.05,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict the relaxed energy from an initial structure.
+        Predict optimized structure(s) and energy/forces.
         
         Args:
-            structure: ASE Atoms object dictionary representation (from Atoms.todict())
+            structures: Single or list of ASE Atoms dictionary representations
+            steps: Maximum number of optimization steps
+            fmax: Force convergence criterion in eV/Å
         
         Returns:
-            Dictionary containing:
-                - energy: Predicted relaxed energy in eV
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
+                - converged: Whether optimization converged
+                - steps: Number of optimization steps taken
+                - energy: Final energy in eV
+                - forces: Final forces in eV/Å
         """
-        return self.model.predict(structure)
-
-    @modal.method()
-    def predict_batch(
-        self,
-        structures: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Perform fast, batched inference on multiple structures.
-
-        Args:
-            structures: List of ASE Atoms object dictionary representations
-
-        Returns:
-            List of prediction outputs (each output corresponds to one input structure)
-        """
-        return self.model._predict_batch(structures)
+        return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
 @app.local_entrypoint()
@@ -989,6 +899,7 @@ def main():
     # - converged: Whether optimization converged
     # - steps: Number of steps taken
     # - energy: Final energy in eV
+    print(result)
     
     # 2. Batch prediction (e.g., CO2 height sweep)
     batch_structures = []
@@ -1000,11 +911,12 @@ def main():
         batch_structures.append(slab.todict())
     
     # Run batch prediction
-    batch_results = model.predict_batch.remote(batch_structures)
+    batch_results = model.predict.remote(batch_structures)
     # Each result contains:
     # - energy: Structure energy in eV
     # - forces: Atomic forces as list
     # - success: Whether prediction succeeded
+    print(batch_results)
     
     # 3. Model comparison
     models = {
@@ -1016,7 +928,8 @@ def main():
     # Compare predictions for a single structure
     test_structure = batch_structures[1]  # Use 2.0Å height structure
     model_predictions = {
-        name: model.predict_batch.remote([test_structure])[0]
+        name: model.predict.remote([test_structure])[0]
         for name, model in models.items()
     }
     # Each prediction contains energy and forces for comparison 
+    print(model_predictions)
