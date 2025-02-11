@@ -1,7 +1,7 @@
 [project]
 name = "opencatalyst-garden"
 version = "0.1.0"
-description = "Add your description here"
+description = "Open Catalyst Project model garden"
 readme = "README.md"
 requires-python = "~=3.10"
 dependencies = [
@@ -14,3 +14,7 @@ dependencies = [
 dev-dependencies = [
     "ipython>=8.32.0",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"

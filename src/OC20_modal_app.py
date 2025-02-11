@@ -505,25 +505,76 @@ app = modal.App(name="opencatalyst-oc20", image=image)
 
 
 class _BaseModal:
-    """Base class for Modal interfaces to OC20 models."""
-    
+    """Base class for Modal interfaces to OC20 models.
+
+    This class encapsulates the common behavior for loading model checkpoints and
+    performing predictions. The core logic for prediction is implemented in the
+    protected method `_predict`, which should be used by the concrete endpoint classes.
+    """
+
     def __init__(self, model_cls: type[BaseOC20Model]):
         self.CHECKPOINT_DIR = "/root/checkpoints"
         self.checkpoint_manager = ModelCheckpointManager(self.CHECKPOINT_DIR)
         self.model = model_cls()
-    
+
     @modal.enter()
     def load_model(self):
-        """Load the model."""
+        """Load and initialize the model with its checkpoint.
+
+        This method retrieves the correct checkpoint for the configured model architecture,
+        then initializes the model's calculator. It should be called before any predictions.
+        """
         checkpoint_path = self.checkpoint_manager.get_checkpoint_path(
             self.model.architecture,
         )
         self.model.initialize_model(str(checkpoint_path))
 
+    def _predict(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
+        steps: int,
+        fmax: float,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Perform the structure optimization prediction using the underlying model.
+
+        This protected method implements the shared logic for predicting optimized
+        atomic structures, energies, and forces based on the provided input structures.
+        It handles both single structure and batch predictions by:
+         - Converting input structures (in dict or ASE Atoms format) to ASE Atoms objects.
+         - Validating that no structure is empty.
+         - Optimizing each structure using the model's associated calculator.
+         - Returning the results in a consistent format.
+
+        Args:
+            structures: A single structure (as a dictionary) or a list of structures,
+                        each represented as a dictionary of atomic attributes.
+            steps: Maximum number of optimization steps to attempt.
+            fmax: The force convergence criterion (in eV/Å). The optimization stops when
+                  the maximum force on any atom is below this threshold.
+
+        Returns:
+            A dictionary (for a single structure) or a list of dictionaries (for multiple structures)
+            where each dictionary includes:
+                - 'structure': The optimized atomic configuration (as a dict).
+                - 'converged': Boolean indicating if the optimization converged.
+                - 'steps': Number of steps taken during optimization.
+                - 'energy': The potential energy of the optimized structure (in eV).
+                - 'forces': A list of force vectors (in eV/Å).
+                - 'success': Boolean indicating overall success of the prediction.
+                - An 'error' field, if any exceptions were encountered during optimization.
+        """
+        return self.model.predict(structures, steps=steps, fmax=fmax)
+
 
 @app.cls(gpu="A10G")
 class EquiformerV2_S2EF(_BaseModal):
-    """Modal interface to EquiformerV2 model for structure-to-energy-and-forces predictions."""
+    """Modal interface to EquiformerV2 model for structure-to-energy-and-forces predictions.
+
+    This class serves as the public endpoint for clients calling the `predict` method.
+    The method delegates to the base class's `_predict` implementation, ensuring that the
+    service correctly associates the method with this specific class.
+    """
     
     def __init__(self):
         super().__init__(_EquiformerV2Large)
@@ -536,22 +587,26 @@ class EquiformerV2_S2EF(_BaseModal):
         fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
-        
+        Predict optimized atomic structures, energies, and forces.
+
+        This method:
+         - Accepts a single structure (or a list of structures) represented as a dictionary
+           (or dictionaries) of atomic information.
+         - Uses the underlying EquiformerV2 model to perform structure optimization via a
+           shared prediction routine.
+         - Returns the optimized structure, convergence status, number of optimization steps,
+           energy, and forces.
+
         Args:
-            structures: Single or list of ASE Atoms dictionary representations
-            steps: Maximum number of optimization steps
-            fmax: Force convergence criterion in eV/Å
-        
+            structures: A dict or list of dicts representing ASE Atoms structures.
+            steps: Maximum optimization steps to perform (default is 200).
+            fmax: Force convergence threshold in eV/Å (default is 0.05).
+
         Returns:
-            Single dictionary or list of dictionaries containing:
-                - structure: Optimized atomic structure
-                - converged: Whether optimization converged
-                - steps: Number of optimization steps taken
-                - energy: Final energy in eV
-                - forces: Final forces in eV/Å
+            A dict or list of dicts containing the optimization results as described in the
+            base class's `_predict` method.
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self._predict(structures, steps, fmax)
 
 
 @app.cls(gpu="A10G")
@@ -584,7 +639,7 @@ class GemNetOC_S2EF(_BaseModal):
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self._predict(structures, steps, fmax)
 
 
 @app.cls(gpu="A10G")
@@ -617,7 +672,7 @@ class PaiNN_S2EF(_BaseModal):
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self._predict(structures, steps, fmax)
 
 
 @app.cls(gpu="A10G")
@@ -650,7 +705,7 @@ class DimeNetPP_S2EF(_BaseModal):
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self._predict(structures, steps, fmax)
 
 
 @app.cls(gpu="A10G")
@@ -683,7 +738,7 @@ class SchNet_S2EF(_BaseModal):
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self._predict(structures, steps, fmax)
 
 
 @app.cls(gpu="A10G")
@@ -716,7 +771,7 @@ class SCN_S2EF(_BaseModal):
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self._predict(structures, steps, fmax)
 
 
 @app.cls(gpu="A10G")
@@ -749,7 +804,7 @@ class ESCN_S2EF(_BaseModal):
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self._predict(structures, steps, fmax)
 
 
 # IS2RE Modal Classes
@@ -783,7 +838,7 @@ class PaiNN_IS2RE(_BaseModal):
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self._predict(structures, steps, fmax)
 
 
 @app.cls(gpu="A10G")
@@ -816,7 +871,7 @@ class DimeNetPP_IS2RE(_BaseModal):
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self._predict(structures, steps, fmax)
 
 
 @app.cls(gpu="A10G")
@@ -849,7 +904,7 @@ class SchNet_IS2RE(_BaseModal):
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self._predict(structures, steps, fmax)
 
 
 @app.local_entrypoint()
