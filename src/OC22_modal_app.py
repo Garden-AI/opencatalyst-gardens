@@ -4,8 +4,6 @@ from enum import Enum
 from typing import Any
 
 import modal
-import torch
-
 
 class ModelArchitecture(str, Enum):
     """Available OC22 model architectures."""
