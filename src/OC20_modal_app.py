@@ -173,7 +173,7 @@ class ModelCheckpointManager:
 
 
 class BaseOC20Model:
-    """Base class for OC20 models providing structure optimization functionality."""
+    """Base class for OC20 models."""
     
     def __init__(self):
         self.architecture: ModelArchitecture
@@ -206,65 +206,30 @@ class BaseOC20Model:
             validated.append(atoms_obj)
         return validated
 
-    def _optimize_structure(
-        self, 
-        atoms, 
-        steps: int, 
-        fmax: float
-    ) -> dict[str, Any]:
-        """
-        Optimize the given ASE Atoms instance using the BFGS method.
 
-        Args:
-            atoms: ASE Atoms instance with its calculator attached.
-            steps: Maximum optimization steps.
-            fmax: Force convergence threshold (eV/Å).
-
-        Returns:
-            Dictionary containing the optimization result.
-        """
-        from ase.optimize import BFGS
-
-        try:
-            optimizer = BFGS(atoms, trajectory=None)
-            converged = optimizer.run(fmax=fmax, steps=steps)
-            result = {
-                "structure": atoms.todict(),
-                "converged": converged,
-                "steps": optimizer.get_number_of_steps(),
-                "energy": float(atoms.get_potential_energy()),
-                "forces": atoms.get_forces().tolist(),
-                "success": True,
-            }
-        except Exception as e:
-            print(f"Optimization failed: {e}")
-            result = {
-                "structure": atoms.todict(),
-                "converged": False,
-                "steps": 0,
-                "energy": None,
-                "forces": None,
-                "success": False,
-                "error": str(e),
-            }
-        return result
-
+class S2EFModel(BaseOC20Model):
+    """Base class for Structure to Energy and Forces (S2EF) models.
+    
+    These models predict energy and forces for structures in their current configuration,
+    without performing any optimization.
+    """
+    
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
-        steps: int = 200,
-        fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Optimize provided structure(s) and return the results.
+        Predict energy and forces for the given structure(s).
 
         Args:
-            structures: Single structure (dict) or list of structures.
-            steps: Maximum optimization steps.
-            fmax: Force convergence threshold (eV/Å).
+            structures: Single structure (as a dictionary) or a list of structures.
 
         Returns:
-            A dictionary for single input or a list of dictionaries for multiple structures.
+            A dictionary (for a single structure) or a list of dictionaries (for multiple structures)
+            containing:
+                - energy: The potential energy of the structure (in eV)
+                - forces: The forces on each atom (in eV/Å)
+                - success: Boolean indicating if prediction succeeded
         """
         import torch
 
@@ -280,14 +245,84 @@ class BaseOC20Model:
             batch = atoms_list[i : i + batch_size]
             for atoms in batch:
                 atoms.set_calculator(self.calculator)
-                results.append(self._optimize_structure(atoms, steps, fmax))
+                try:
+                    result = {
+                        'energy': float(atoms.get_potential_energy()),
+                        'forces': atoms.get_forces().tolist(),
+                        'success': True
+                    }
+                except Exception as e:
+                    result = {
+                        'energy': None,
+                        'forces': None,
+                        'success': False,
+                        'error': str(e)
+                    }
+                results.append(result)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
         return results[0] if single_input else results
 
 
-class _EquiformerV2Large(BaseOC20Model):
+class IS2REModel(BaseOC20Model):
+    """Base class for Initial Structure to Relaxed Energy (IS2RE) models.
+    
+    These models directly predict the relaxed energy from an initial structure,
+    without performing explicit optimization steps.
+    """
+    
+    def predict(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict relaxed energy for the given initial structure(s).
+
+        Args:
+            structures: Single structure (as a dictionary) or a list of structures.
+
+        Returns:
+            A dictionary (for a single structure) or a list of dictionaries (for multiple structures)
+            containing:
+                - relaxed_energy: The predicted relaxed energy (in eV)
+                - success: Boolean indicating if prediction succeeded
+        """
+        import torch
+
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
+
+        atoms_list = self._validate_structures(structures)
+        results = []
+        batch_size = 32
+        
+        for i in range(0, len(atoms_list), batch_size):
+            batch = atoms_list[i : i + batch_size]
+            for atoms in batch:
+                atoms.set_calculator(self.calculator)
+                try:
+                    # Note: The calculator should be trained for IS2RE prediction
+                    # and return the relaxed energy directly
+                    result = {
+                        'relaxed_energy': float(atoms.get_potential_energy()),
+                        'success': True
+                    }
+                except Exception as e:
+                    result = {
+                        'relaxed_energy': None,
+                        'success': False,
+                        'error': str(e)
+                    }
+                results.append(result)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        return results[0] if single_input else results
+
+
+class _EquiformerV2Large(S2EFModel):
     """Internal implementation of EquiformerV2 Large model."""
     
     def __init__(self):
@@ -306,7 +341,7 @@ class _EquiformerV2Large(BaseOC20Model):
         )
 
 
-class _GemNetOCLarge(BaseOC20Model):
+class _GemNetOCLarge(S2EFModel):
     """Internal implementation of GemNet-OC Large model."""
     
     def __init__(self):
@@ -325,7 +360,7 @@ class _GemNetOCLarge(BaseOC20Model):
         )
 
 
-class _PaiNNBase(BaseOC20Model):
+class _PaiNNBase(S2EFModel):
     """Internal implementation of PaiNN model."""
     
     def __init__(self):
@@ -344,7 +379,7 @@ class _PaiNNBase(BaseOC20Model):
         )
 
 
-class _DimeNetPPLarge(BaseOC20Model):
+class _DimeNetPPLarge(S2EFModel):
     """Internal implementation of DimeNet++ Large model."""
     
     def __init__(self):
@@ -363,7 +398,7 @@ class _DimeNetPPLarge(BaseOC20Model):
         )
 
 
-class _SchNetLarge(BaseOC20Model):
+class _SchNetLarge(S2EFModel):
     """Internal implementation of SchNet Large model."""
     
     def __init__(self):
@@ -382,7 +417,7 @@ class _SchNetLarge(BaseOC20Model):
         )
 
 
-class _SCNLarge(BaseOC20Model):
+class _SCNLarge(S2EFModel):
     """Internal implementation of SCN Large model."""
     
     def __init__(self):
@@ -401,7 +436,7 @@ class _SCNLarge(BaseOC20Model):
         )
 
 
-class _ESCNLarge(BaseOC20Model):
+class _ESCNLarge(S2EFModel):
     """Internal implementation of eSCN Large model."""
     
     def __init__(self):
@@ -421,12 +456,12 @@ class _ESCNLarge(BaseOC20Model):
 
 
 # IS2RE Model Implementations
-class _PaiNN_IS2RE(BaseOC20Model):
+class _PaiNN_IS2RE(IS2REModel):
     """Internal implementation of PaiNN model for IS2RE."""
     
     def __init__(self):
         super().__init__()
-        self.architecture = ModelArchitecture.PAINN
+        self.architecture = f"{ModelArchitecture.PAINN}_IS2RE"
     
     def initialize_model(self, checkpoint_path: str):
         """Initialize the model from checkpoint."""
@@ -437,15 +472,16 @@ class _PaiNN_IS2RE(BaseOC20Model):
         self.calculator = OCPCalculator(
             checkpoint_path=checkpoint_path,
             cpu=False if torch.cuda.is_available() else True,
+            only_output=['energy']  # Only request energy output for IS2RE models
         )
 
 
-class _DimeNetPP_IS2RE(BaseOC20Model):
+class _DimeNetPP_IS2RE(IS2REModel):
     """Internal implementation of DimeNet++ model for IS2RE."""
     
     def __init__(self):
         super().__init__()
-        self.architecture = ModelArchitecture.DIMENET_PLUS_PLUS
+        self.architecture = f"{ModelArchitecture.DIMENET_PLUS_PLUS}_IS2RE"
     
     def initialize_model(self, checkpoint_path: str):
         """Initialize the model from checkpoint."""
@@ -459,12 +495,12 @@ class _DimeNetPP_IS2RE(BaseOC20Model):
         )
 
 
-class _SchNet_IS2RE(BaseOC20Model):
+class _SchNet_IS2RE(IS2REModel):
     """Internal implementation of SchNet model for IS2RE."""
     
     def __init__(self):
         super().__init__()
-        self.architecture = ModelArchitecture.SCHNET
+        self.architecture = f"{ModelArchitecture.SCHNET}_IS2RE"
     
     def initialize_model(self, checkpoint_path: str):
         """Initialize the model from checkpoint."""
@@ -480,25 +516,62 @@ class _SchNet_IS2RE(BaseOC20Model):
 
 def download_specific_checkpoint(architecture: ModelArchitecture):
     """Download checkpoint for a specific model during image build."""
+    import os
+    
     CHECKPOINT_DIR = "/root/checkpoints"
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    os.chmod(CHECKPOINT_DIR, 0o777)  # Ensure directory is writable
+    
     manager = ModelCheckpointManager(CHECKPOINT_DIR)
     model_info = MODELS.get(architecture)
     if not model_info:
         raise ValueError(f"Unsupported model: {architecture.value}")
-    _ = manager.download_checkpoint(architecture)
+    
+    try:
+        from fairchem.core.models.model_registry import model_name_to_local_file
+        print(f"Downloading checkpoint for {model_info.name}...")
+        
+        checkpoint_path = model_name_to_local_file(
+            model_info.registry_name,
+            local_cache=CHECKPOINT_DIR
+        )
+        
+        if not os.path.exists(checkpoint_path):
+            raise RuntimeError(f"Checkpoint download failed for {model_info.name}")
+            
+        expected_path = manager.get_checkpoint_path(architecture)
+        if checkpoint_path != expected_path:
+            os.rename(checkpoint_path, expected_path)
+            checkpoint_path = expected_path
+            
+        print(f"Successfully downloaded checkpoint to {checkpoint_path}")
+        return checkpoint_path
+        
+    except Exception as e:
+        print(f"Error downloading checkpoint for {model_info.name}: {str(e)}")
+        raise
 
 # Create base image with common dependencies
 base_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
         "torch>=2.4.0",
-        "fairchem-core",
-        "ase",
-        "lmdb",
+        "fairchem-core>=0.2.0",  # Ensure we have a recent version
+        "ase>=3.22.1",
+        "lmdb>=1.4.1",
+        "requests>=2.31.0",  # For checkpoint downloads
+        "tqdm>=4.66.1",      # For download progress
     )
     .run_commands(
-        "pip install pyg_lib torch_geometric torch_sparse torch_scatter -f https://data.pyg.org/whl/torch-2.4.0+cu121.html"
+        # Install PyG dependencies
+        "pip install pyg_lib torch_geometric torch_sparse torch_scatter -f https://data.pyg.org/whl/torch-2.4.0+cu121.html",
+        # Create checkpoint directory with proper permissions
+        "mkdir -p /root/checkpoints && chmod 777 /root/checkpoints"
     )
+    .env({
+        "TORCH_HOME": "/root/checkpoints",  # Set torch home for model downloads
+        "FAIRCHEM_CACHE_DIR": "/root/checkpoints"  # Set fairchem cache location
+    })
 )
 
 # Create specific images for each model architecture
@@ -601,11 +674,7 @@ class _BaseModal:
 
     @modal.enter()
     def load_model(self):
-        """Load and initialize the model with its checkpoint.
-
-        This method retrieves the correct checkpoint for the configured model architecture,
-        then initializes the model's calculator. It should be called before any predictions.
-        """
+        """Load and initialize the model with its checkpoint."""
         checkpoint_path = self.checkpoint_manager.get_checkpoint_path(
             self.model.architecture,
         )
@@ -614,49 +683,86 @@ class _BaseModal:
     def _predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
-        steps: int,
-        fmax: float,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Perform the structure optimization prediction using the underlying model.
+        Perform prediction using the underlying model.
 
-        This protected method implements the shared logic for predicting optimized
-        atomic structures, energies, and forces based on the provided input structures.
-        It handles both single structure and batch predictions by:
-         - Converting input structures (in dict or ASE Atoms format) to ASE Atoms objects.
-         - Validating that no structure is empty.
-         - Optimizing each structure using the model's associated calculator.
-         - Returning the results in a consistent format.
+        This protected method implements the shared logic for predicting either:
+         - Energy and forces (for S2EF models)
+         - Relaxed energy (for IS2RE models)
 
         Args:
             structures: A single structure (as a dictionary) or a list of structures,
-                        each represented as a dictionary of atomic attributes.
-            steps: Maximum number of optimization steps to attempt.
-            fmax: The force convergence criterion (in eV/Å). The optimization stops when
-                  the maximum force on any atom is below this threshold.
+                      each represented as a dictionary of atomic attributes.
 
         Returns:
-            A dictionary (for a single structure) or a list of dictionaries (for multiple structures)
-            where each dictionary includes:
-                - 'structure': The optimized atomic configuration (as a dict).
-                - 'converged': Boolean indicating if the optimization converged.
-                - 'steps': Number of steps taken during optimization.
-                - 'energy': The potential energy of the optimized structure (in eV).
-                - 'forces': A list of force vectors (in eV/Å).
-                - 'success': Boolean indicating overall success of the prediction.
-                - An 'error' field, if any exceptions were encountered during optimization.
+            For S2EF models:
+                - energy: The potential energy (in eV)
+                - forces: The atomic forces (in eV/Å)
+                - success: Whether prediction succeeded
+            
+            For IS2RE models:
+                - relaxed_energy: The predicted relaxed energy (in eV)
+                - success: Whether prediction succeeded
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self.model.predict(structures)
+
+
+def optimize_structure(
+    atoms,
+    calculator,
+    steps: int = 200,
+    fmax: float = 0.05,
+) -> dict[str, Any]:
+    """
+    Optimize an atomic structure using ASE's BFGS optimizer.
+    
+    Args:
+        atoms: ASE Atoms object to optimize
+        calculator: Calculator that provides energy and forces
+        steps: Maximum number of optimization steps
+        fmax: Force convergence criterion in eV/Å
+        
+    Returns:
+        Dictionary containing:
+            - structure: Optimized structure
+            - converged: Whether optimization converged
+            - steps: Number of steps taken
+            - energy: Final energy
+            - forces: Final forces
+            - success: Whether optimization succeeded
+    """
+    from ase.optimize import BFGS
+    
+    atoms.set_calculator(calculator)
+    try:
+        optimizer = BFGS(atoms, trajectory=None)
+        converged = optimizer.run(fmax=fmax, steps=steps)
+        result = {
+            "structure": atoms.todict(),
+            "converged": converged,
+            "steps": optimizer.get_number_of_steps(),
+            "energy": float(atoms.get_potential_energy()),
+            "forces": atoms.get_forces().tolist(),
+            "success": True,
+        }
+    except Exception as e:
+        print(f"Optimization failed: {e}")
+        result = {
+            "structure": atoms.todict(),
+            "converged": False,
+            "steps": 0,
+            "energy": None,
+            "forces": None,
+            "success": False,
+            "error": str(e),
+        }
+    return result
 
 
 @app.cls(gpu="A10G", image=equiformer_image)
 class EquiformerV2_S2EF(_BaseModal):
-    """Modal interface to EquiformerV2 model for structure-to-energy-and-forces predictions.
-
-    This class serves as the public endpoint for clients calling the `predict` method.
-    The method delegates to the base class's `_predict` implementation, ensuring that the
-    service correctly associates the method with this specific class.
-    """
+    """Modal interface to EquiformerV2 model for structure-to-energy-and-forces predictions."""
     
     def __init__(self):
         super().__init__(_EquiformerV2Large)
@@ -665,30 +771,62 @@ class EquiformerV2_S2EF(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict energy and forces for the given structure(s).
+        
+        Args:
+            structures: Single or list of ASE Atoms dictionary representations
+        
+        Returns:
+            Single dictionary or list of dictionaries containing:
+                - energy: Structure energy in eV
+                - forces: Atomic forces in eV/Å
+                - success: Whether prediction succeeded
+        """
+        return self._predict(structures)
+    
+    @modal.method()
+    def optimize(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized atomic structures, energies, and forces.
-
-        This method:
-         - Accepts a single structure (or a list of structures) represented as a dictionary
-           (or dictionaries) of atomic information.
-         - Uses the underlying EquiformerV2 model to perform structure optimization via a
-           shared prediction routine.
-         - Returns the optimized structure, convergence status, number of optimization steps,
-           energy, and forces.
-
+        Optimize structure(s) using this model as the calculator.
+        
         Args:
-            structures: A dict or list of dicts representing ASE Atoms structures.
-            steps: Maximum optimization steps to perform (default is 200).
-            fmax: Force convergence threshold in eV/Å (default is 0.05).
-
+            structures: Single or list of ASE Atoms dictionary representations
+            steps: Maximum number of optimization steps
+            fmax: Force convergence criterion in eV/Å
+        
         Returns:
-            A dict or list of dicts containing the optimization results as described in the
-            base class's `_predict` method.
+            Single dictionary or list of dictionaries containing:
+                - structure: Optimized atomic structure
+                - converged: Whether optimization converged
+                - steps: Number of optimization steps taken
+                - energy: Final energy in eV
+                - forces: Final forces in eV/Å
+                - success: Whether optimization succeeded
         """
-        return self._predict(structures, steps, fmax)
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
+            
+        atoms_list = self.model._validate_structures(structures)
+        results = []
+        
+        for atoms in atoms_list:
+            result = optimize_structure(
+                atoms,
+                self.model.calculator,
+                steps=steps,
+                fmax=fmax
+            )
+            results.append(result)
+            
+        return results[0] if single_input else results
 
 
 @app.cls(gpu="A10G", image=gemnet_image)
@@ -702,11 +840,30 @@ class GemNetOC_S2EF(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict energy and forces for the given structure(s).
+        
+        Args:
+            structures: Single or list of ASE Atoms dictionary representations
+        
+        Returns:
+            Single dictionary or list of dictionaries containing:
+                - energy: Structure energy in eV
+                - forces: Atomic forces in eV/Å
+                - success: Whether prediction succeeded
+        """
+        return self._predict(structures)
+    
+    @modal.method()
+    def optimize(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Optimize structure(s) using this model as the calculator.
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
@@ -720,8 +877,25 @@ class GemNetOC_S2EF(_BaseModal):
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
+                - success: Whether optimization succeeded
         """
-        return self._predict(structures, steps, fmax)
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
+            
+        atoms_list = self.model._validate_structures(structures)
+        results = []
+        
+        for atoms in atoms_list:
+            result = optimize_structure(
+                atoms,
+                self.model.calculator,
+                steps=steps,
+                fmax=fmax
+            )
+            results.append(result)
+            
+        return results[0] if single_input else results
 
 
 @app.cls(gpu="A10G", image=painn_image)
@@ -735,11 +909,30 @@ class PaiNN_S2EF(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict energy and forces for the given structure(s).
+        
+        Args:
+            structures: Single or list of ASE Atoms dictionary representations
+        
+        Returns:
+            Single dictionary or list of dictionaries containing:
+                - energy: Structure energy in eV
+                - forces: Atomic forces in eV/Å
+                - success: Whether prediction succeeded
+        """
+        return self._predict(structures)
+    
+    @modal.method()
+    def optimize(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Optimize structure(s) using this model as the calculator.
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
@@ -753,8 +946,25 @@ class PaiNN_S2EF(_BaseModal):
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
+                - success: Whether optimization succeeded
         """
-        return self._predict(structures, steps, fmax)
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
+            
+        atoms_list = self.model._validate_structures(structures)
+        results = []
+        
+        for atoms in atoms_list:
+            result = optimize_structure(
+                atoms,
+                self.model.calculator,
+                steps=steps,
+                fmax=fmax
+            )
+            results.append(result)
+            
+        return results[0] if single_input else results
 
 
 @app.cls(gpu="A10G", image=dimenetpp_image)
@@ -768,11 +978,30 @@ class DimeNetPP_S2EF(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict energy and forces for the given structure(s).
+        
+        Args:
+            structures: Single or list of ASE Atoms dictionary representations
+        
+        Returns:
+            Single dictionary or list of dictionaries containing:
+                - energy: Structure energy in eV
+                - forces: Atomic forces in eV/Å
+                - success: Whether prediction succeeded
+        """
+        return self._predict(structures)
+    
+    @modal.method()
+    def optimize(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Optimize structure(s) using this model as the calculator.
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
@@ -786,8 +1015,25 @@ class DimeNetPP_S2EF(_BaseModal):
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
+                - success: Whether optimization succeeded
         """
-        return self._predict(structures, steps, fmax)
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
+            
+        atoms_list = self.model._validate_structures(structures)
+        results = []
+        
+        for atoms in atoms_list:
+            result = optimize_structure(
+                atoms,
+                self.model.calculator,
+                steps=steps,
+                fmax=fmax
+            )
+            results.append(result)
+            
+        return results[0] if single_input else results
 
 
 @app.cls(gpu="A10G", image=schnet_image)
@@ -801,11 +1047,30 @@ class SchNet_S2EF(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict energy and forces for the given structure(s).
+        
+        Args:
+            structures: Single or list of ASE Atoms dictionary representations
+        
+        Returns:
+            Single dictionary or list of dictionaries containing:
+                - energy: Structure energy in eV
+                - forces: Atomic forces in eV/Å
+                - success: Whether prediction succeeded
+        """
+        return self._predict(structures)
+    
+    @modal.method()
+    def optimize(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Optimize structure(s) using this model as the calculator.
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
@@ -819,8 +1084,25 @@ class SchNet_S2EF(_BaseModal):
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
+                - success: Whether optimization succeeded
         """
-        return self._predict(structures, steps, fmax)
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
+            
+        atoms_list = self.model._validate_structures(structures)
+        results = []
+        
+        for atoms in atoms_list:
+            result = optimize_structure(
+                atoms,
+                self.model.calculator,
+                steps=steps,
+                fmax=fmax
+            )
+            results.append(result)
+            
+        return results[0] if single_input else results
 
 
 @app.cls(gpu="A10G", image=scn_image)
@@ -834,11 +1116,30 @@ class SCN_S2EF(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict energy and forces for the given structure(s).
+        
+        Args:
+            structures: Single or list of ASE Atoms dictionary representations
+        
+        Returns:
+            Single dictionary or list of dictionaries containing:
+                - energy: Structure energy in eV
+                - forces: Atomic forces in eV/Å
+                - success: Whether prediction succeeded
+        """
+        return self._predict(structures)
+    
+    @modal.method()
+    def optimize(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Optimize structure(s) using this model as the calculator.
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
@@ -852,8 +1153,25 @@ class SCN_S2EF(_BaseModal):
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
+                - success: Whether optimization succeeded
         """
-        return self._predict(structures, steps, fmax)
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
+            
+        atoms_list = self.model._validate_structures(structures)
+        results = []
+        
+        for atoms in atoms_list:
+            result = optimize_structure(
+                atoms,
+                self.model.calculator,
+                steps=steps,
+                fmax=fmax
+            )
+            results.append(result)
+            
+        return results[0] if single_input else results
 
 
 @app.cls(gpu="A10G", image=escn_image)
@@ -867,11 +1185,30 @@ class ESCN_S2EF(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict energy and forces for the given structure(s).
+        
+        Args:
+            structures: Single or list of ASE Atoms dictionary representations
+        
+        Returns:
+            Single dictionary or list of dictionaries containing:
+                - energy: Structure energy in eV
+                - forces: Atomic forces in eV/Å
+                - success: Whether prediction succeeded
+        """
+        return self._predict(structures)
+    
+    @modal.method()
+    def optimize(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Optimize structure(s) using this model as the calculator.
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
@@ -885,8 +1222,25 @@ class ESCN_S2EF(_BaseModal):
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
+                - success: Whether optimization succeeded
         """
-        return self._predict(structures, steps, fmax)
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
+            
+        atoms_list = self.model._validate_structures(structures)
+        results = []
+        
+        for atoms in atoms_list:
+            result = optimize_structure(
+                atoms,
+                self.model.calculator,
+                steps=steps,
+                fmax=fmax
+            )
+            results.append(result)
+            
+        return results[0] if single_input else results
 
 
 # IS2RE Modal Classes
@@ -901,26 +1255,19 @@ class PaiNN_IS2RE(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
-        steps: int = 200,
-        fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Predict relaxed energy for the given initial structure(s).
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
-            steps: Maximum number of optimization steps
-            fmax: Force convergence criterion in eV/Å
         
         Returns:
             Single dictionary or list of dictionaries containing:
-                - structure: Optimized atomic structure
-                - converged: Whether optimization converged
-                - steps: Number of optimization steps taken
-                - energy: Final energy in eV
-                - forces: Final forces in eV/Å
+                - relaxed_energy: Predicted relaxed energy in eV
+                - success: Whether prediction succeeded
         """
-        return self._predict(structures, steps, fmax)
+        return self._predict(structures)
 
 
 @app.cls(gpu="A10G", image=dimenetpp_is2re_image)
@@ -934,26 +1281,19 @@ class DimeNetPP_IS2RE(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
-        steps: int = 200,
-        fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Predict relaxed energy for the given initial structure(s).
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
-            steps: Maximum number of optimization steps
-            fmax: Force convergence criterion in eV/Å
         
         Returns:
             Single dictionary or list of dictionaries containing:
-                - structure: Optimized atomic structure
-                - converged: Whether optimization converged
-                - steps: Number of optimization steps taken
-                - energy: Final energy in eV
-                - forces: Final forces in eV/Å
+                - relaxed_energy: Predicted relaxed energy in eV
+                - success: Whether prediction succeeded
         """
-        return self._predict(structures, steps, fmax)
+        return self._predict(structures)
 
 
 @app.cls(gpu="A10G", image=schnet_is2re_image)
@@ -967,106 +1307,68 @@ class SchNet_IS2RE(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
-        steps: int = 200,
-        fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Predict relaxed energy for the given initial structure(s).
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
-            steps: Maximum number of optimization steps
-            fmax: Force convergence criterion in eV/Å
         
         Returns:
             Single dictionary or list of dictionaries containing:
-                - structure: Optimized atomic structure
-                - converged: Whether optimization converged
-                - steps: Number of optimization steps taken
-                - energy: Final energy in eV
-                - forces: Final forces in eV/Å
+                - relaxed_energy: Predicted relaxed energy in eV
+                - success: Whether prediction succeeded
         """
-        return self._predict(structures, steps, fmax)
+        return self._predict(structures)
 
 
 @app.local_entrypoint()
 def main():
-    """Example usage demonstrating how to use OC20 models for catalysis predictions.
-
-    Note: All models have the same interface, so you can use them interchangeably.
-    Here we use the EquiformerV2 model.
+    """Simple example demonstrating how to use OC20 models.
     
-    This example shows:
-    1. Single structure prediction with structure optimization
-    2. Batch prediction for parameter sweeps
-    3. Model comparison
+    Shows basic usage of:
+    1. S2EF model for energy/forces prediction
+    2. IS2RE model for direct relaxed energy prediction
     """
-    from ase.build import fcc111, add_adsorbate
+    # Create a simple test structure (H2O molecule)
+    structure = create_simple_molecule()
+    
+    # Example 1: Using S2EF model
+    print("\nExample 1: Structure to Energy and Forces (S2EF)")
+    print("=" * 50)
+    
+    s2ef_model = PaiNN_S2EF()
+    s2ef_result = s2ef_model.predict.remote(structure)
+    
+    if isinstance(s2ef_result, dict) and s2ef_result.get('success', False):
+        print(f"Predicted energy: {s2ef_result['energy']:.3f} eV")
+        forces = s2ef_result.get('forces', [])
+        print(f"Predicted forces shape: {len(forces)} atoms × 3 components")
+    else:
+        error = s2ef_result.get('error', 'Unknown error') if isinstance(s2ef_result, dict) else str(s2ef_result)
+        print(f"Prediction failed: {error}")
+    
+    # Example 2: Using IS2RE model
+    print("\nExample 2: Initial Structure to Relaxed Energy (IS2RE)")
+    print("=" * 50)
+    
+    is2re_model = PaiNN_IS2RE()
+    is2re_result = is2re_model.predict.remote(structure)
+    
+    if isinstance(is2re_result, dict) and is2re_result.get('success', False):
+        print(f"Predicted relaxed energy: {is2re_result['relaxed_energy']:.3f} eV")
+    else:
+        error = is2re_result.get('error', 'Unknown error') if isinstance(is2re_result, dict) else str(is2re_result)
+        print(f"Prediction failed: {error}")
+
+def create_simple_molecule():
+    """Create a simple H2O molecule for testing."""
     from ase import Atoms
     
-    def create_pt_co_slab():
-        """Create a Pt-Co(111) slab with CO2 adsorbate."""
-        # Create a Pt-Co(111) slab
-        slab = fcc111('Pt', size=(2, 2, 4), vacuum=12.0)
-        slab.symbols[2] = 'Co'  # Replace one second layer atom with Co
-        
-        # Create CO2 adsorbate
-        co2 = Atoms('CO2',
-                   positions=[[0.0, 0.0, 0.0],  # C
-                            [0.0, 0.0, 1.16],   # O
-                            [0.0, 0.0, -1.16]]) # O
-        
-        # Add CO2 at a bridge site
-        add_adsorbate(slab, co2, height=2.0, position=(2.0, 1.5))
-        return slab
+    # Create H2O molecule with typical bond lengths and angle
+    water = Atoms('H2O',
+                 positions=[[0.0, 0.0, 0.0],    # O
+                          [0.0, 0.8, 0.6],      # H
+                          [0.0, -0.8, 0.6]])    # H
     
-    # 1. Single structure prediction
-    slab = create_pt_co_slab()
-    structure_dict = slab.todict()
-    
-    # Run structure optimization with EquiformerV2
-    model = EquiformerV2_S2EF()
-    result = model.predict.remote(
-        structure_dict,
-        steps=200,    # Maximum optimization steps
-        fmax=0.05,    # Force convergence criterion in eV/Å
-    )
-    # Result contains:
-    # - structure: Optimized structure as dictionary
-    # - converged: Whether optimization converged
-    # - steps: Number of steps taken
-    # - energy: Final energy in eV
-    print(result)
-    
-    # 2. Batch prediction (e.g., CO2 height sweep)
-    batch_structures = []
-    heights = [1.8, 2.0, 2.2, 2.4]  # Different CO2 heights to test
-    for height in heights:
-        slab = create_pt_co_slab()
-        co2_indices = [-3, -2, -1]  # Last 3 atoms are CO2
-        slab.positions[co2_indices] += [0, 0, height - 2.0]
-        batch_structures.append(slab.todict())
-    
-    # Run batch prediction
-    batch_results = model.predict.remote(batch_structures)
-    # Each result contains:
-    # - energy: Structure energy in eV
-    # - forces: Atomic forces as list
-    # - success: Whether prediction succeeded
-    print(batch_results)
-    
-    # 3. Model comparison
-    models = {
-        "EquiformerV2": EquiformerV2_S2EF(),
-        "GemNet-OC": GemNetOC_S2EF(),
-        "PaiNN": PaiNN_S2EF(),
-    }
-    
-    # Compare predictions for a single structure
-    test_structure = batch_structures[1]  # Use 2.0Å height structure
-    model_predictions = {
-        name: model.predict.remote([test_structure])[0]
-        for name, model in models.items()
-    }
-    # Each prediction contains energy and forces for comparison 
-    print(model_predictions)
+    return water.todict()

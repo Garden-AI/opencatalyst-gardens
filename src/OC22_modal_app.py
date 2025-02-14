@@ -98,7 +98,7 @@ class ModelCheckpointManager:
 
 
 class BaseOC22Model:
-    """Base class for OC22 models providing structure optimization functionality."""
+    """Base class for OC22 models providing both prediction and optimization functionality."""
     
     def __init__(self):
         self.architecture: ModelArchitecture
@@ -130,6 +130,96 @@ class BaseOC22Model:
                 raise ValueError("Structure cannot be empty")
             validated.append(atoms_obj)
         return validated
+
+    def predict(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict energy and forces for the given structure(s) without optimization.
+
+        Args:
+            structures: Single structure (dict) or list of structures.
+
+        Returns:
+            A dictionary for single input or a list of dictionaries containing:
+                - energy: The potential energy (in eV)
+                - forces: The atomic forces (in eV/Å)
+                - success: Whether prediction succeeded
+        """
+        import torch
+
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
+
+        atoms_list = self._validate_structures(structures)
+        results = []
+        batch_size = 32
+        
+        for i in range(0, len(atoms_list), batch_size):
+            batch = atoms_list[i : i + batch_size]
+            for atoms in batch:
+                atoms.set_calculator(self.calculator)
+                try:
+                    result = {
+                        'energy': float(atoms.get_potential_energy()),
+                        'forces': atoms.get_forces().tolist(),
+                        'success': True
+                    }
+                except Exception as e:
+                    result = {
+                        'energy': None,
+                        'forces': None,
+                        'success': False,
+                        'error': str(e)
+                    }
+                results.append(result)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        return results[0] if single_input else results
+
+    def optimize(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
+        steps: int = 200,
+        fmax: float = 0.05,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Optimize structure(s) using this model as the calculator.
+
+        Args:
+            structures: Single structure (dict) or list of structures.
+            steps: Maximum optimization steps.
+            fmax: Force convergence threshold (eV/Å).
+
+        Returns:
+            A dictionary for single input or a list of dictionaries containing:
+                - structure: Optimized structure
+                - converged: Whether optimization converged
+                - steps: Number of steps taken
+                - energy: Final energy
+                - forces: Final forces
+                - success: Whether optimization succeeded
+        """
+        import torch
+
+        single_input = isinstance(structures, dict)
+        if single_input:
+            structures = [structures]
+
+        atoms_list = self._validate_structures(structures)
+        results = []
+        
+        for atoms in atoms_list:
+            atoms.set_calculator(self.calculator)
+            result = self._optimize_structure(atoms, steps, fmax)
+            results.append(result)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        return results[0] if single_input else results
 
     def _optimize_structure(
         self, 
@@ -173,43 +263,6 @@ class BaseOC22Model:
                 "error": str(e),
             }
         return result
-
-    def predict(
-        self,
-        structures: dict[str, Any] | list[dict[str, Any]],
-        steps: int = 200,
-        fmax: float = 0.05,
-    ) -> dict[str, Any] | list[dict[str, Any]]:
-        """
-        Optimize provided structure(s) and return the results.
-
-        Args:
-            structures: Single structure (dict) or list of structures.
-            steps: Maximum optimization steps.
-            fmax: Force convergence threshold (eV/Å).
-
-        Returns:
-            A dictionary for single input or a list of dictionaries for multiple structures.
-        """
-        import torch
-
-        single_input = isinstance(structures, dict)
-        if single_input:
-            structures = [structures]
-
-        atoms_list = self._validate_structures(structures)
-        results = []
-        batch_size = 32
-        
-        for i in range(0, len(atoms_list), batch_size):
-            batch = atoms_list[i : i + batch_size]
-            for atoms in batch:
-                atoms.set_calculator(self.calculator)
-                results.append(self._optimize_structure(atoms, steps, fmax))
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-        return results[0] if single_input else results
 
 
 # Model Implementation Classes
@@ -308,21 +361,20 @@ class _BaseModal:
     def _predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
-        steps: int,
-        fmax: float,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Perform the structure optimization prediction using the underlying model.
+        Predict energy and forces for the given structure(s) without optimization.
 
         Args:
             structures: Single structure (dict) or list of structures.
-            steps: Maximum optimization steps.
-            fmax: Force convergence threshold (eV/Å).
 
         Returns:
-            A dictionary for single input or a list of dictionaries for multiple structures.
+            A dictionary for single input or a list of dictionaries containing:
+                - energy: The potential energy (in eV)
+                - forces: The atomic forces (in eV/Å)
+                - success: Whether prediction succeeded
         """
-        return self.model.predict(structures, steps=steps, fmax=fmax)
+        return self.model.predict(structures)
 
 
 # Modal Endpoints
@@ -337,11 +389,30 @@ class GemNetOC_S2EF(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict energy and forces for the given structure(s).
+        
+        Args:
+            structures: Single or list of ASE Atoms dictionary representations
+        
+        Returns:
+            Single dictionary or list of dictionaries containing:
+                - energy: Structure energy in eV
+                - forces: Atomic forces in eV/Å
+                - success: Whether prediction succeeded
+        """
+        return self._predict(structures)
+    
+    @modal.method()
+    def optimize(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Optimize structure(s) using this model as the calculator.
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
@@ -355,8 +426,9 @@ class GemNetOC_S2EF(_BaseModal):
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
+                - success: Whether optimization succeeded
         """
-        return self._predict(structures, steps, fmax)
+        return self.model.optimize(structures, steps=steps, fmax=fmax)
 
 
 @app.cls(gpu="A10G", image=equiformer_image)
@@ -368,11 +440,30 @@ class EquiformerV2_S2EF(_BaseModal):
     def predict(
         self,
         structures: dict[str, Any] | list[dict[str, Any]],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Predict energy and forces for the given structure(s).
+        
+        Args:
+            structures: Single or list of ASE Atoms dictionary representations
+        
+        Returns:
+            Single dictionary or list of dictionaries containing:
+                - energy: Structure energy in eV
+                - forces: Atomic forces in eV/Å
+                - success: Whether prediction succeeded
+        """
+        return self._predict(structures)
+    
+    @modal.method()
+    def optimize(
+        self,
+        structures: dict[str, Any] | list[dict[str, Any]],
         steps: int = 200,
         fmax: float = 0.05,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Predict optimized structure(s) and energy/forces.
+        Optimize structure(s) using this model as the calculator.
         
         Args:
             structures: Single or list of ASE Atoms dictionary representations
@@ -386,8 +477,9 @@ class EquiformerV2_S2EF(_BaseModal):
                 - steps: Number of optimization steps taken
                 - energy: Final energy in eV
                 - forces: Final forces in eV/Å
+                - success: Whether optimization succeeded
         """
-        return self._predict(structures, steps, fmax)
+        return self.model.optimize(structures, steps=steps, fmax=fmax)
 
 
 @app.local_entrypoint()
@@ -412,27 +504,61 @@ def main():
         add_adsorbate(slab, co2, height=2.0, position=(2.0, 1.5))
         return slab
     
-    # Example using GemNet-OC model
+    # Create test structure
     slab = create_pt_co_slab()
     structure_dict = slab.todict()
     
-    # Run structure optimization
+    # Example 1: Direct S2EF prediction
+    print("\nExample 1: Structure to Energy and Forces (S2EF)")
+    print("=" * 50)
+    
     model = GemNetOC_S2EF()
-    result = model.predict.remote(
+    result = model.predict.remote(structure_dict)
+    
+    if isinstance(result, dict) and result.get('success', False):
+        print(f"Predicted energy: {result['energy']:.3f} eV")
+        forces = result.get('forces', [])
+        print(f"Predicted forces shape: {len(forces)} atoms × 3 components")
+    else:
+        error = result.get('error', 'Unknown error') if isinstance(result, dict) else str(result)
+        print(f"Prediction failed: {error}")
+    
+    # Example 2: Structure optimization
+    print("\nExample 2: Structure Optimization")
+    print("=" * 50)
+    
+    opt_result = model.optimize.remote(
         structure_dict,
         steps=200,    # Maximum optimization steps
         fmax=0.05,    # Force convergence criterion in eV/Å
     )
-    print(result)
+    
+    if isinstance(opt_result, dict) and opt_result.get('success', False):
+        print(f"Optimization {'converged' if opt_result['converged'] else 'did not converge'}")
+        print(f"Steps taken: {opt_result['steps']}")
+        print(f"Final energy: {opt_result['energy']:.3f} eV")
+        print(f"Final max force: {max(abs(f) for f in sum(opt_result['forces'], [])):.3f} eV/Å")
+    else:
+        error = opt_result.get('error', 'Unknown error') if isinstance(opt_result, dict) else str(opt_result)
+        print(f"Optimization failed: {error}")
     
     # Compare predictions from different models
+    print("\nExample 3: Model Comparison")
+    print("=" * 50)
+    
     models = {
         "GemNet-OC": GemNetOC_S2EF(),
         "EquiformerV2": EquiformerV2_S2EF(),
     }
     
-    model_predictions = {
-        name: model.predict.remote([structure_dict])[0]
-        for name, model in models.items()
-    }
-    print(model_predictions) 
+    for name, model in models.items():
+        print(f"\n{name}:")
+        result = model.predict.remote(structure_dict)
+        if isinstance(result, dict) and result.get('success', False):
+            print(f"  Energy: {result['energy']:.3f} eV")
+            forces = result.get('forces', [])
+            max_force = max(abs(f) for f in sum(forces, []))
+            print(f"  Max force component: {max_force:.3f} eV/Å")
+        else:
+            error = result.get('error', 'Unknown error') if isinstance(result, dict) else str(result)
+            print(f"  Prediction failed: {error}") 
