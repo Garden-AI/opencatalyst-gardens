@@ -250,16 +250,14 @@ class _EquiformerV2(BaseOC22Model):
         )
 
 
-def download_checkpoints():
-    """Download the default checkpoints during image build."""
+def download_specific_checkpoint(architecture: ModelArchitecture):
+    """Download checkpoint for a specific model during image build."""
     CHECKPOINT_DIR = "/root/checkpoints"
     manager = ModelCheckpointManager(CHECKPOINT_DIR)
-    # Download checkpoints for all supported models
-    for arch in MODELS.keys():
-        _ = manager.download_checkpoint(arch)
+    _ = manager.download_checkpoint(architecture)
 
-
-image = (
+# Create base image with common dependencies
+base_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
         "torch>=2.4.0",
@@ -269,10 +267,26 @@ image = (
     .run_commands(
         "pip install pyg_lib torch_geometric torch_sparse torch_scatter -f https://data.pyg.org/whl/torch-2.4.0+cu121.html"
     )
-    .run_function(download_checkpoints)
 )
 
-app = modal.App(name="opencatalyst-oc22", image=image)
+# Create specific images for each model
+gemnet_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(ModelArchitecture.GEMNET_OC,)
+    )
+)
+
+equiformer_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(ModelArchitecture.EQUIFORMER_V2,)
+    )
+)
+
+app = modal.App(name="opencatalyst-oc22")
 
 
 class _BaseModal:
@@ -312,7 +326,7 @@ class _BaseModal:
 
 
 # Modal Endpoints
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=gemnet_image)
 class GemNetOC_S2EF(_BaseModal):
     """Modal interface to GemNet-OC model for structure-to-energy-and-forces predictions."""
     
@@ -345,7 +359,7 @@ class GemNetOC_S2EF(_BaseModal):
         return self._predict(structures, steps, fmax)
 
 
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=equiformer_image)
 class EquiformerV2_S2EF(_BaseModal):
     def __init__(self):
         super().__init__(_EquiformerV2)

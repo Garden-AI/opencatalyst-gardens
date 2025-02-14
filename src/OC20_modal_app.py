@@ -478,16 +478,17 @@ class _SchNet_IS2RE(BaseOC20Model):
         )
 
 
-def download_checkpoints():
-    """Download the default checkpoints during image build."""
+def download_specific_checkpoint(architecture: ModelArchitecture):
+    """Download checkpoint for a specific model during image build."""
     CHECKPOINT_DIR = "/root/checkpoints"
     manager = ModelCheckpointManager(CHECKPOINT_DIR)
-    # Download checkpoints for all supported models
-    for arch in MODELS.keys():
-        _ = manager.download_checkpoint(arch)
+    model_info = MODELS.get(architecture)
+    if not model_info:
+        raise ValueError(f"Unsupported model: {architecture.value}")
+    _ = manager.download_checkpoint(architecture)
 
-
-image = (
+# Create base image with common dependencies
+base_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
         "torch>=2.4.0",
@@ -498,10 +499,91 @@ image = (
     .run_commands(
         "pip install pyg_lib torch_geometric torch_sparse torch_scatter -f https://data.pyg.org/whl/torch-2.4.0+cu121.html"
     )
-    .run_function(download_checkpoints)
 )
 
-app = modal.App(name="opencatalyst-oc20", image=image)
+# Create specific images for each model architecture
+equiformer_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(ModelArchitecture.EQUIFORMER_V2,)
+    )
+)
+
+gemnet_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(ModelArchitecture.GEMNET_OC,)
+    )
+)
+
+painn_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(ModelArchitecture.PAINN,)
+    )
+)
+
+dimenetpp_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(ModelArchitecture.DIMENET_PLUS_PLUS,)
+    )
+)
+
+schnet_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(ModelArchitecture.SCHNET,)
+    )
+)
+
+scn_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(ModelArchitecture.SCN,)
+    )
+)
+
+escn_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(ModelArchitecture.ESCN,)
+    )
+)
+
+# Create IS2RE specific images
+painn_is2re_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(f"{ModelArchitecture.PAINN}_IS2RE",)
+    )
+)
+
+dimenetpp_is2re_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(f"{ModelArchitecture.DIMENET_PLUS_PLUS}_IS2RE",)
+    )
+)
+
+schnet_is2re_image = (
+    base_image
+    .run_function(
+        download_specific_checkpoint,
+        args=(f"{ModelArchitecture.SCHNET}_IS2RE",)
+    )
+)
+
+app = modal.App(name="opencatalyst-oc20")
 
 
 class _BaseModal:
@@ -567,7 +649,7 @@ class _BaseModal:
         return self.model.predict(structures, steps=steps, fmax=fmax)
 
 
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=equiformer_image)
 class EquiformerV2_S2EF(_BaseModal):
     """Modal interface to EquiformerV2 model for structure-to-energy-and-forces predictions.
 
@@ -609,7 +691,7 @@ class EquiformerV2_S2EF(_BaseModal):
         return self._predict(structures, steps, fmax)
 
 
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=gemnet_image)
 class GemNetOC_S2EF(_BaseModal):
     """Modal interface to GemNet-OC model for structure-to-energy-and-forces predictions."""
     
@@ -642,7 +724,7 @@ class GemNetOC_S2EF(_BaseModal):
         return self._predict(structures, steps, fmax)
 
 
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=painn_image)
 class PaiNN_S2EF(_BaseModal):
     """Modal interface to PaiNN model for structure-to-energy-and-forces predictions."""
     
@@ -675,7 +757,7 @@ class PaiNN_S2EF(_BaseModal):
         return self._predict(structures, steps, fmax)
 
 
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=dimenetpp_image)
 class DimeNetPP_S2EF(_BaseModal):
     """Modal interface to DimeNet++ model for structure-to-energy-and-forces predictions."""
     
@@ -708,7 +790,7 @@ class DimeNetPP_S2EF(_BaseModal):
         return self._predict(structures, steps, fmax)
 
 
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=schnet_image)
 class SchNet_S2EF(_BaseModal):
     """Modal interface to SchNet model for structure-to-energy-and-forces predictions."""
     
@@ -741,7 +823,7 @@ class SchNet_S2EF(_BaseModal):
         return self._predict(structures, steps, fmax)
 
 
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=scn_image)
 class SCN_S2EF(_BaseModal):
     """Modal interface to SCN model for structure-to-energy-and-forces predictions."""
     
@@ -774,7 +856,7 @@ class SCN_S2EF(_BaseModal):
         return self._predict(structures, steps, fmax)
 
 
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=escn_image)
 class ESCN_S2EF(_BaseModal):
     """Modal interface to eSCN model for structure-to-energy-and-forces predictions."""
     
@@ -808,7 +890,7 @@ class ESCN_S2EF(_BaseModal):
 
 
 # IS2RE Modal Classes
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=painn_is2re_image)
 class PaiNN_IS2RE(_BaseModal):
     """Modal interface to PaiNN model for initial-structure-to-relaxed-energy predictions."""
     
@@ -841,7 +923,7 @@ class PaiNN_IS2RE(_BaseModal):
         return self._predict(structures, steps, fmax)
 
 
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=dimenetpp_is2re_image)
 class DimeNetPP_IS2RE(_BaseModal):
     """Modal interface to DimeNet++ model for initial-structure-to-relaxed-energy predictions."""
     
@@ -874,7 +956,7 @@ class DimeNetPP_IS2RE(_BaseModal):
         return self._predict(structures, steps, fmax)
 
 
-@app.cls(gpu="A10G")
+@app.cls(gpu="A10G", image=schnet_is2re_image)
 class SchNet_IS2RE(_BaseModal):
     """Modal interface to SchNet model for initial-structure-to-relaxed-energy predictions."""
     
