@@ -7,7 +7,7 @@ from typing import Any
 import modal
 
 
-class ModelArchitecture(str, Enum):
+class ModelArchitecture(Enum):
     """Available model architectures."""
     EQUIFORMER_V2 = "EquiformerV2"
     GEMNET_OC = "GemNet-OC"
@@ -556,7 +556,7 @@ base_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
         "torch>=2.4.0",
-        "fairchem-core>=0.2.0",  # Ensure we have a recent version
+        "fairchem-core>",
         "ase>=3.22.1",
         "lmdb>=1.4.1",
         "requests>=2.31.0",  # For checkpoint downloads

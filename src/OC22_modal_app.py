@@ -29,12 +29,11 @@ class ModelInfo:
 
 
 # Registry of available OC22 models with verified checkpoint information
-# Note: Registry names and checkpoint filenames will need to be updated
 MODELS = {
     ModelArchitecture.GEMNET_OC: ModelInfo(
         name="GemNet-OC",
-        registry_name="GemNet-OC-S2EFS-OC20->OC22",  # Placeholder - needs update
-        checkpoint_filename="gnoc_finetune_all_s2ef.pt",  # Placeholder - needs update
+        registry_name="GemNet-OC-S2EFS-OC20->OC22",
+        checkpoint_filename="gnoc_finetune_all_s2ef.pt",
         description="GemNet-OC model trained on OC22 dataset for structure to energy and forces",
         architecture=ModelArchitecture.GEMNET_OC,
         default_task=ModelTask.S2EF,
@@ -43,7 +42,7 @@ MODELS = {
         name="EquiformerV2",
         registry_name="EquiformerV2-lE4-lF100-S2EFS-OC22",
         checkpoint_filename="eq2_121M_e4_f100_oc22_s2ef.pt",
-        description="EquiformerV2 model trained on OC222 dataset for structure to energt and force",
+        description="EquiformerV2 model trained on OC222 dataset for structure to energy and force",
         architecture=ModelArchitecture.EQUIFORMER_V2,
         default_task=ModelTask.S2EF,
     ),
