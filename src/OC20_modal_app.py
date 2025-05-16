@@ -556,7 +556,7 @@ base_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
         "torch>=2.4.0",
-        "fairchem-core>",
+        "fairchem-core",
         "ase>=3.22.1",
         "lmdb>=1.4.1",
         "requests>=2.31.0",  # For checkpoint downloads
