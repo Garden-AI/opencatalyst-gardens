@@ -133,8 +133,9 @@ base_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
         "torch>=2.4.0",
-        "fairchem-core>=2.0.0",  # Fairchem v2
+        "fairchem-core>=2.0.0",
         "ase>=3.22.1",
+        "numpy",
     )
     .run_commands(
         # Install PyG dependencies for the specific torch version
@@ -1020,7 +1021,114 @@ class UMASmall(BaseUMAModel):
             compound_structure, reference_structures, stoichiometry, domain
         )
 
+    @modal.method()
+    def run_is2re_relaxation(
+        self,
+        atoms_dict: Dict[str, Any],
+        task_domain: str = "omat",
+        max_steps: int = 200, 
+        force_max: float = 0.05,
+        record_trajectory: bool = True,
+        optimizer_type: str = "FIRE",
+    ) -> Dict[str, Any]:
+        """
+        Run structure relaxation compatible with Matbench Discovery IS2RE task.
 
+        Args:
+            atoms_dict: Dictionary containing atoms data (ASE format).
+            task_domain: Target domain ("oc20", "omat", "omol", "odac", "omc").
+            max_steps: Maximum number of optimization steps.
+            force_max: Force tolerance for convergence in eV/Å.
+            record_trajectory: Whether to include trajectory frames in results.
+            optimizer_type: Algorithm ("FIRE", "LBFGS", "BFGS").
+
+        Returns:
+            Dictionary containing:
+            - final_energy: Relaxed energy.
+            - relaxed_atoms: Relaxed structure (as dict).
+            - trajectory: List of dictionaries with positions, cell, energy, forces, and stress for each step.
+            - converged: Whether optimization converged.
+            - nsteps: Number of optimization steps.
+            - success: Whether the operation succeeded.
+            - error: Error message if success is False.
+        """
+        from ase import Atoms
+        from ase.optimize import FIRE, LBFGS, BFGS
+        from ase.filters import FrechetCellFilter
+        # numpy is imported at the top of the file and now in the image
+
+        domain = TaskDomain(task_domain)
+        calculator = self.get_calculator_for_task(domain)
+
+        try:
+            atoms = Atoms.fromdict(atoms_dict)
+            atoms.calc = calculator
+
+            if optimizer_type.upper() == "FIRE":
+                opt_class = FIRE
+            elif optimizer_type.upper() == "LBFGS":
+                opt_class = LBFGS
+            elif optimizer_type.upper() == "BFGS":
+                opt_class = BFGS
+            else:
+                raise ValueError(f"Unsupported optimizer: {optimizer_type}")
+
+            if any(atoms.get_pbc()):
+                optimizable_atoms = FrechetCellFilter(atoms)
+            else:
+                optimizable_atoms = atoms
+            
+            optimizer = opt_class(optimizable_atoms, logfile='-') # type: ignore[arg-type]
+
+            trajectory_data = []
+            if record_trajectory:
+                def record_state():
+                    cell_list = atoms.get_cell().tolist() # ASE Cell object has tolist()
+                    trajectory_data.append({
+                        'positions': atoms.get_positions().tolist(),
+                        'cell': cell_list, 
+                        'energy': float(atoms.get_potential_energy()),
+                        'forces': atoms.get_forces().tolist(),
+                        'stress': atoms.get_stress().tolist()
+                    })
+                optimizer.attach(record_state, interval=1)
+                record_state()
+
+
+            optimizer.run(fmax=force_max, steps=max_steps)
+            
+            if record_trajectory and optimizer.get_number_of_steps() > 0:
+                current_pos = atoms.get_positions().tolist()
+                if not trajectory_data or trajectory_data[-1]['positions'] != current_pos:
+                    record_state()
+
+
+            final_energy = float(atoms.get_potential_energy())
+            relaxed_atoms_dict = atoms.todict()
+            converged = optimizer.converged()
+            nsteps = optimizer.get_number_of_steps()
+
+            return {
+                "final_energy": final_energy,
+                "relaxed_atoms": relaxed_atoms_dict,
+                "trajectory": trajectory_data if record_trajectory else None,
+                "converged": converged,
+                "nsteps": nsteps,
+                "success": True,
+            }
+
+        except Exception as e:
+            import traceback
+            print(f"Error during IS2RE relaxation: {e}\\n{traceback.format_exc()}")
+            return {
+                "final_energy": None,
+                "relaxed_atoms": None,
+                "trajectory": None,
+                "converged": False,
+                "nsteps": 0,
+                "success": False,
+                "error": str(e),
+            }
 
 
 @app.local_entrypoint()
